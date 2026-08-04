@@ -2584,9 +2584,7 @@ defmodule Ash do
           |> Ash.Query.set_tenant(
             opts[:tenant] || query.tenant || Map.get(record.__metadata__, :tenant)
           )
-          |> Ash.Query.as_of(
-            opts[:as_of] || query.as_of || Map.get(record.__metadata__, :as_of)
-          )
+          |> Ash.Query.as_of(opts[:as_of] || query.as_of || Map.get(record.__metadata__, :as_of))
 
         keyword ->
           resource

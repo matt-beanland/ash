@@ -3103,7 +3103,6 @@ defmodule Ash.Query do
   def resolve_as_of(:now), do: DateTime.utc_now()
   def resolve_as_of(other), do: other
 
-
   # Apply an `as_of` from opts without clobbering an unset query when there is none.
   defp maybe_set_as_of(query, nil), do: query
   defp maybe_set_as_of(query, value), do: as_of(query, value)
@@ -4670,7 +4669,9 @@ defmodule Ash.Query do
         |> select(
           with_temporal_field(
             combination.select ||
-              MapSet.to_list(Ash.Resource.Info.selected_by_default_attribute_names(query.resource)),
+              MapSet.to_list(
+                Ash.Resource.Info.selected_by_default_attribute_names(query.resource)
+              ),
             query.resource
           )
         )

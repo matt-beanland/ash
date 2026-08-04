@@ -3393,7 +3393,11 @@ defmodule Ash.Changeset do
             %{
               changeset
               | arguments:
-                  Map.put(changeset.arguments, argument.name, default(changeset, :create, argument))
+                  Map.put(
+                    changeset.arguments,
+                    argument.name,
+                    default(changeset, :create, argument)
+                  )
             }
           end
 
