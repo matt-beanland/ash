@@ -3115,6 +3115,8 @@ defmodule Ash.Query do
   See the `temporal` section of `Ash.Resource.Dsl`.
   """
   @spec as_of(t() | Ash.Resource.t(), DateTime.t() | :now | nil) :: t()
+  def as_of(query, nil), do: new(query)
+
   def as_of(query, as_of) do
     query
     |> new()
@@ -3126,7 +3128,6 @@ defmodule Ash.Query do
   # as a concrete value. A `DateTime` fixes the instant; `nil` means unset.
   def resolve_as_of(:now), do: DateTime.utc_now()
   def resolve_as_of(other), do: other
-
 
   # Apply an `as_of` from opts without clobbering an unset query when there is none.
   defp maybe_set_as_of(query, nil), do: query
@@ -4709,7 +4710,9 @@ defmodule Ash.Query do
         |> select(
           with_temporal_field(
             combination.select ||
-              MapSet.to_list(Ash.Resource.Info.selected_by_default_attribute_names(query.resource)),
+              MapSet.to_list(
+                Ash.Resource.Info.selected_by_default_attribute_names(query.resource)
+              ),
             query.resource
           )
         )

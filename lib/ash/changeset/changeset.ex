@@ -3393,7 +3393,11 @@ defmodule Ash.Changeset do
             %{
               changeset
               | arguments:
-                  Map.put(changeset.arguments, argument.name, default(changeset, :create, argument))
+                  Map.put(
+                    changeset.arguments,
+                    argument.name,
+                    default(changeset, :create, argument)
+                  )
             }
           end
 
@@ -5531,6 +5535,11 @@ defmodule Ash.Changeset do
   layer.
   """
   @spec as_of(t(), DateTime.t() | :now | nil) :: t()
+  # A nil `as_of` is not written to the context. `shared` propagates into nested
+  # actions, so setting it would put `as_of: nil` on every subject, including
+  # resources that are not temporal.
+  def as_of(changeset, nil), do: %{changeset | as_of: nil}
+
   def as_of(changeset, as_of) do
     %{changeset | as_of: as_of}
     |> set_context(%{private: %{as_of: as_of}, shared: %{as_of: as_of}})
