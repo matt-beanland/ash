@@ -247,4 +247,49 @@ defmodule Ash.TemporalTest do
       assert DateTime.compare(thing.inserted_at, before) in [:eq, :gt]
     end
   end
+
+  describe "Ets serves as-of reads" do
+    alias Ash.Test.Temporal.EtsVersioned
+
+    @early %Ash.Range{
+      lower: ~U[2020-01-01 00:00:00Z],
+      upper: ~U[2021-01-01 00:00:00Z],
+      bounds: :"[)"
+    }
+    @open %Ash.Range{lower: ~U[2021-01-01 00:00:00Z], upper: nil, bounds: :"[)"}
+
+    setup do
+      # ⚠️ Distinct ids, deliberately. `Ash.DataLayer.Ets` keys its table by the
+      # resource's primary key alone (`pkey_map/2`), so two versions of ONE record
+      # collide and the second overwrites the first. Storing several versions of a
+      # record needs the period in the storage key, which is not done yet — these
+      # tests cover the as-of narrowing, not multi-version storage.
+      Ash.Seed.seed!(%EtsVersioned{id: 1, name: "early", valid_at: @early})
+      Ash.Seed.seed!(%EtsVersioned{id: 2, name: "open", valid_at: @open})
+      :ok
+    end
+
+    test "an instant selects the records whose period holds it" do
+      assert [%{name: "early"}] =
+               EtsVersioned |> Ash.Query.as_of(~U[2020-06-01 00:00:00Z]) |> Ash.read!()
+
+      assert [%{name: "open"}] =
+               EtsVersioned |> Ash.Query.as_of(~U[2026-06-01 00:00:00Z]) |> Ash.read!()
+    end
+
+    # The half-open rule at the seam: the instant the two periods share belongs
+    # to the later one only.
+    test "a shared boundary belongs to the later period" do
+      assert [%{name: "open"}] =
+               EtsVersioned |> Ash.Query.as_of(~U[2021-01-01 00:00:00Z]) |> Ash.read!()
+    end
+
+    test "an instant before every period returns nothing" do
+      assert [] = EtsVersioned |> Ash.Query.as_of(~U[2019-01-01 00:00:00Z]) |> Ash.read!()
+    end
+
+    test "a read with no as_of is anchored to now, so it sees current state" do
+      assert [%{name: "open"}] = EtsVersioned |> Ash.read!()
+    end
+  end
 end
