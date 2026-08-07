@@ -59,6 +59,39 @@ defmodule Ash.Range do
   def empty?(%__MODULE__{}), do: false
 
   @doc """
+  Whether the range holds `value`.
+
+  An unbounded end holds everything beyond it, and an empty range holds nothing.
+  Each bound is compared with `Comp`, so an inner type behaves inside a range as
+  it does outside one, and a bound that excludes its own value (`(` or `)`) is
+  not held.
+  """
+  @spec contains?(t(), term()) :: boolean()
+  def contains?(%__MODULE__{} = range, value) do
+    not empty?(range) and above_lower?(range, value) and below_upper?(range, value)
+  end
+
+  defp above_lower?(%{lower: nil}, _value), do: true
+
+  defp above_lower?(range, value) do
+    case Comp.compare(value, range.lower) do
+      :gt -> true
+      :eq -> lower_inclusive?(range)
+      :lt -> false
+    end
+  end
+
+  defp below_upper?(%{upper: nil}, _value), do: true
+
+  defp below_upper?(range, value) do
+    case Comp.compare(value, range.upper) do
+      :lt -> true
+      :eq -> upper_inclusive?(range)
+      :gt -> false
+    end
+  end
+
+  @doc """
   Compares two ranges by lower bound then upper, as Postgres orders them.
 
   Empty sorts below everything, an unbounded lower is `-∞` and an unbounded upper

@@ -187,4 +187,44 @@ defmodule Ash.Type.RangeTest do
       refute Range.empty?(%Range{lower: 1, upper: nil, bounds: :"[)"})
     end
   end
+
+  describe "contains?/2" do
+    test "a bounded range holds values between its bounds" do
+      range = %Ash.Range{lower: 1, upper: 5, bounds: :"[)"}
+
+      refute Ash.Range.contains?(range, 0)
+      assert Ash.Range.contains?(range, 1)
+      assert Ash.Range.contains?(range, 4)
+      refute Ash.Range.contains?(range, 5)
+    end
+
+    test "a bound holds its own value only when inclusive" do
+      assert Ash.Range.contains?(%Ash.Range{lower: 1, upper: 5, bounds: :"[]"}, 5)
+      refute Ash.Range.contains?(%Ash.Range{lower: 1, upper: 5, bounds: :"()"}, 1)
+      assert Ash.Range.contains?(%Ash.Range{lower: 1, upper: 5, bounds: :"(]"}, 5)
+      refute Ash.Range.contains?(%Ash.Range{lower: 1, upper: 5, bounds: :"(]"}, 1)
+    end
+
+    test "an unbounded end holds everything beyond it" do
+      assert Ash.Range.contains?(%Ash.Range{lower: nil, upper: 5}, -1_000)
+      assert Ash.Range.contains?(%Ash.Range{lower: 1, upper: nil}, 1_000)
+      assert Ash.Range.contains?(%Ash.Range{lower: nil, upper: nil}, 0)
+    end
+
+    test "an empty range holds nothing" do
+      refute Ash.Range.contains?(%Ash.Range{lower: 5, upper: 5, bounds: :"[)"}, 5)
+      refute Ash.Range.contains?(%Ash.Range{lower: 9, upper: 5}, 7)
+    end
+
+    test "holds datetimes by Comp, not by term order" do
+      range = %Ash.Range{
+        lower: ~U[2026-01-31 00:00:00Z],
+        upper: ~U[2026-03-01 00:00:00Z],
+        bounds: :"[)"
+      }
+
+      assert Ash.Range.contains?(range, ~U[2026-02-01 00:00:00Z])
+      refute Ash.Range.contains?(range, ~U[2026-03-02 00:00:00Z])
+    end
+  end
 end

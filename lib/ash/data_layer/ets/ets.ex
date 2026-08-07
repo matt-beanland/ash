@@ -58,6 +58,7 @@ defmodule Ash.DataLayer.Ets do
       :filter,
       :limit,
       :tenant,
+      :as_of,
       :domain,
       :select,
       sort: [],
@@ -187,6 +188,7 @@ defmodule Ash.DataLayer.Ets do
   def can?(_, :combine), do: true
   def can?(_, {:combine, _type}), do: true
   def can?(_, :composite_primary_key), do: true
+  def can?(_, :temporal), do: true
   def can?(_, :expression_calculation), do: true
   def can?(_, :expression_calculation_sort), do: true
   def can?(_, :multitenancy), do: true
@@ -290,6 +292,12 @@ defmodule Ash.DataLayer.Ets do
   @impl true
   def set_tenant(_resource, query, tenant) do
     {:ok, %{query | tenant: tenant}}
+  end
+
+  @doc false
+  @impl true
+  def set_as_of(_resource, query, as_of) do
+    {:ok, %{query | as_of: as_of}}
   end
 
   @doc false
@@ -409,6 +417,7 @@ defmodule Ash.DataLayer.Ets do
 
     with {:ok, records} when records != [] <-
            get_records(resource, combination_of, parent, tenant),
+         records <- as_of_records(records, resource, query.as_of),
          %Query{
            filter: filter,
            offset: offset,
@@ -1406,6 +1415,23 @@ defmodule Ash.DataLayer.Ets do
 
       {:error, error} ->
         {:error, error}
+    end
+  end
+
+  # A temporal read is a point in time: keep the one version of each record whose
+  # period holds `as_of`. Non-temporal resources and reads without an `as_of` are
+  # untouched, so nothing that does not opt in pays for this.
+  defp as_of_records(records, resource, as_of) do
+    with %DateTime{} <- as_of,
+         attribute when not is_nil(attribute) <- Ash.Resource.Info.temporal_attribute(resource) do
+      Enum.filter(records, fn record ->
+        case Map.get(record, attribute) do
+          %Ash.Range{} = period -> Ash.Range.contains?(period, as_of)
+          _ -> false
+        end
+      end)
+    else
+      _ -> records
     end
   end
 
