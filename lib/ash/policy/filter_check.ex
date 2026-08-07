@@ -130,7 +130,7 @@ defmodule Ash.Policy.FilterCheck do
                   defer_to_filter(expr)
 
                 no_filter_static_forbidden_reads? || authorizer.for_fields ||
-                    authorizer.action.type != :read ||
+                  authorizer.action.type != :read ||
                     context[:private][:pre_flight_authorization?] ->
                   try_eval(expr, authorizer)
 
