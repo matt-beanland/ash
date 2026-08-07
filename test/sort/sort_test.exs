@@ -19,6 +19,7 @@ defmodule Ash.Test.Sort.SortTest do
     attributes do
       uuid_primary_key :id
       attribute :name, :string, public?: true
+      attribute :unsortable_name, :string, public?: true, sortable?: false
       attribute :private_name, :string
     end
 
@@ -57,12 +58,28 @@ defmodule Ash.Test.Sort.SortTest do
         public? true
       end
 
+      attribute :unsortable_title, :string, public?: true, sortable?: false
       attribute :points, :integer
+    end
+
+    aggregates do
+      count :comment_count, :comments_by_author, public?: true, sortable?: false
+    end
+
+    calculations do
+      calculate :title_calculation, :string, expr(title),
+        public?: true,
+        sortable?: false
     end
 
     relationships do
       belongs_to :author, Author do
         public? true
+      end
+
+      belongs_to :unsortable_author, Author do
+        public? true
+        sortable? false
       end
 
       belongs_to :private_author, Author
@@ -131,7 +148,6 @@ defmodule Ash.Test.Sort.SortTest do
     attributes do
       uuid_primary_key :id
       attribute :name, :string, public?: true
-      attribute :secret_name, :string, public?: true, sortable?: false
     end
 
     actions do
@@ -149,7 +165,6 @@ defmodule Ash.Test.Sort.SortTest do
 
     relationships do
       belongs_to :author, NoSortAuthor, public?: true
-      belongs_to :private_author, NoSortAuthor, public?: true, sortable?: false
     end
 
     actions do
@@ -280,24 +295,130 @@ defmodule Ash.Test.Sort.SortTest do
                Ash.Sort.parse_input(NoSortAuthor, "name")
     end
 
-    test "returns UnsortableField error for field with sortable?: false" do
-      assert {:error, %Ash.Error.Query.UnsortableField{field: :secret_name}} =
-               Ash.Sort.parse_input(NoSortAuthor, "secret_name")
-    end
-
     test "returns UnsortableField error for relationship field with unsortable type" do
       assert {:error, %Ash.Error.Query.UnsortableField{field: :name}} =
                Ash.Sort.parse_input(NoSortPost, "author.name")
     end
 
-    test "returns UnsortableField error for relationship field with sortable?: false" do
-      assert {:error, %Ash.Error.Query.UnsortableField{field: :secret_name}} =
-               Ash.Sort.parse_input(NoSortPost, "author.secret_name")
+    test "parse_input rejects top-level fields configured with sortable?: false" do
+      for field <- [:unsortable_title, :comment_count, :title_calculation] do
+        assert {:error,
+                %Ash.Error.Query.UnsortableField{
+                  resource: Ash.Test.Sort.SortTest.Post,
+                  field: ^field
+                }} = Ash.Sort.parse_input(Post, field)
+      end
     end
 
-    test "returns UnsortableField error for relationship with sortable?: false" do
-      assert {:error, %Ash.Error.Query.UnsortableField{field: :private_author}} =
-               Ash.Sort.parse_input(NoSortPost, "private_author.name")
+    test "sort_input rejects top-level fields configured with sortable?: false" do
+      for field <- [:unsortable_title, :comment_count, :title_calculation] do
+        assert %Ash.Query{
+                 valid?: false,
+                 errors: [
+                   %Ash.Error.Query.UnsortableField{
+                     resource: Ash.Test.Sort.SortTest.Post,
+                     field: ^field
+                   }
+                 ]
+               } = Ash.Query.sort_input(Post, field)
+      end
+    end
+
+    test "sort rejects top-level fields configured with sortable?: false" do
+      for field <- [:unsortable_title, :comment_count, :title_calculation] do
+        assert %Ash.Query{
+                 valid?: false,
+                 errors: [
+                   %Ash.Error.Query.UnsortableField{
+                     resource: Ash.Test.Sort.SortTest.Post,
+                     field: ^field
+                   }
+                 ]
+               } = Ash.Query.sort(Post, field)
+      end
+    end
+
+    test "expression sorts reject references to unsortable fields and relationships" do
+      require Ash.Sort
+
+      assert %Ash.Query{
+               valid?: false,
+               errors: [
+                 %Ash.Error.Query.UnsortableField{
+                   resource: Ash.Test.Sort.SortTest.Post,
+                   field: :unsortable_title
+                 }
+               ]
+             } = Ash.Query.sort(Post, Ash.Sort.expr_sort(unsortable_title, :string))
+
+      assert %Ash.Query{
+               valid?: false,
+               errors: [
+                 %Ash.Error.Query.UnsortableField{
+                   resource: Ash.Test.Sort.SortTest.Author,
+                   field: :unsortable_name
+                 }
+               ]
+             } = Ash.Query.sort(Post, Ash.Sort.expr_sort(author.unsortable_name, :string))
+
+      assert %Ash.Query{
+               valid?: false,
+               errors: [
+                 %Ash.Error.Query.UnsortableField{
+                   resource: Ash.Test.Sort.SortTest.Post,
+                   field: :unsortable_author
+                 }
+               ]
+             } = Ash.Query.sort(Post, Ash.Sort.expr_sort(unsortable_author.name, :string))
+    end
+
+    test "nested sorts enforce field and relationship flags" do
+      assert {:ok, [{%Ash.Query.Calculation{}, :asc}]} =
+               Ash.Sort.parse_input(Post, "author.name")
+
+      assert {:error,
+              %Ash.Error.Query.UnsortableField{
+                resource: Ash.Test.Sort.SortTest.Author,
+                field: :unsortable_name
+              }} = Ash.Sort.parse_input(Post, "author.unsortable_name")
+
+      assert {:error,
+              %Ash.Error.Query.UnsortableField{
+                resource: Ash.Test.Sort.SortTest.Post,
+                field: :unsortable_author
+              }} = Ash.Sort.parse_input(Post, "unsortable_author.name")
+    end
+  end
+
+  describe "runtime_sort/3 rekey" do
+    test "returns the input records reordered by the sort" do
+      a = %Post{id: "1", title: "a"}
+      b = %Post{id: "2", title: "b"}
+      c = %Post{id: "3", title: "c"}
+
+      assert [^c, ^b, ^a] =
+               Ash.Actions.Sort.runtime_sort([a, b, c], [title: :desc], resource: Post)
+    end
+
+    test "rekeys duplicate primary keys to the first matching input record" do
+      # Two distinct records share a primary key: every occurrence must resolve
+      # to the *first* one in the input, not the last.
+      a = %Post{id: "1", title: "x"}
+      b = %Post{id: "1", title: "y"}
+      c = %Post{id: "2", title: "z"}
+
+      assert [^c, ^a, ^a] =
+               Ash.Actions.Sort.runtime_sort([a, b, c], [title: :desc], resource: Post)
+    end
+
+    test "does not rekey records whose primary key is nil" do
+      # A nil key matches nothing, including another nil-keyed record, so each is
+      # returned as-is rather than collapsed onto a shared nil bucket.
+      a = %Post{id: nil, title: "z"}
+      b = %Post{id: nil, title: "a"}
+
+      assert [^b, ^a] =
+               Ash.Actions.Sort.runtime_sort([a, b], [title: :asc], resource: Post)
     end
   end
 end
