@@ -2501,6 +2501,24 @@ defmodule Ash.Actions.Read do
           from_now
         end
 
+      %Ash.Query.Function.Ago{arguments: [duration]} = ago
+      when is_struct(duration, Duration) ->
+        if as_of = opts[:as_of] do
+          Ash.Query.Function.Ago.datetime_add(as_of, Duration.negate(duration))
+        else
+          ago
+        end
+
+      # `today()` returns a Date rather than a DateTime, so it anchors by taking
+      # the date of `as_of` rather than by shifting an interval. `Date.utc_today/0`
+      # is UTC, so the anchored value is the UTC date of the instant.
+      %Ash.Query.Function.Today{} = today ->
+        if as_of = opts[:as_of] do
+          DateTime.to_date(as_of)
+        else
+          today
+        end
+
       %Ash.Query.Parent{} = parent ->
         if List.wrap(opts[:parent_stack]) != [] do
           %{
