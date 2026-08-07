@@ -18,7 +18,9 @@ defmodule Ash.Type.RangeTest do
   @date_constraints date_constraints
 
   @lower ~U[2026-01-01 00:00:00.000000Z]
+  @middle ~U[2026-01-15 00:00:00.000000Z]
   @upper ~U[2026-02-01 00:00:00.000000Z]
+  @latest ~U[2026-03-01 00:00:00.000000Z]
 
   test "the :range short name resolves to Ash.Type.Range" do
     assert Ash.Type.get_type(:range) == Ash.Type.Range
@@ -77,5 +79,112 @@ defmodule Ash.Type.RangeTest do
       Ash.Type.cast_input(Ash.Type.Range, %Range{lower: @upper, upper: @lower}, @constraints)
 
     assert {:error, _} = Ash.Type.apply_constraints(Ash.Type.Range, range, @constraints)
+  end
+
+  describe "ordering" do
+    # Every expectation below is the order PostgreSQL returns for the equivalent
+    # `tstzrange` values, the type a `:datetime` range maps to. tstzrange is
+    # continuous, so bounds survive as written and inclusivity is observable — a
+    # discrete type like the `int8range` behind an `:integer` range canonicalises
+    # to `[)` first and hides it.
+    @ordered [
+      %Range{lower: @upper, upper: @upper, bounds: :"[)"},
+      %Range{lower: nil, upper: @upper, bounds: :"()"},
+      %Range{lower: nil, upper: @upper, bounds: :"(]"},
+      %Range{lower: nil, upper: nil, bounds: :"()"},
+      %Range{lower: @lower, upper: @upper, bounds: :"[)"},
+      %Range{lower: @lower, upper: @upper, bounds: :"[]"},
+      %Range{lower: @lower, upper: nil, bounds: :"[)"},
+      %Range{lower: @lower, upper: @upper, bounds: :"()"},
+      %Range{lower: @lower, upper: @upper, bounds: :"(]"},
+      %Range{lower: @lower, upper: nil, bounds: :"()"}
+    ]
+
+    test "sorts as Postgres does" do
+      assert @ordered |> Enum.shuffle() |> Enum.sort(Range) == @ordered
+    end
+
+    # A short period nested inside a longer one, where ordering by lower and
+    # ordering by upper disagree. Without a comparator the generic fallback
+    # compares the structs as maps, whose key order puts `upper` first, so this
+    # came back reversed from what Postgres returns for the same two ranges.
+    test "a nested range orders by lower, not upper" do
+      short = %Range{lower: @middle, upper: @upper, bounds: :"[)"}
+      long = %Range{lower: @lower, upper: @latest, bounds: :"[)"}
+
+      assert Range.compare(short, long) == :gt
+      assert Enum.sort([short, long], Range) == [long, short]
+    end
+
+    test "orders by lower bound before upper" do
+      assert Range.compare(
+               %Range{lower: @lower, upper: @upper, bounds: :"[)"},
+               %Range{lower: @upper, upper: @upper, bounds: :"[]"}
+             ) == :lt
+    end
+
+    test "an unbounded lower is below every value, an unbounded upper above" do
+      assert Range.compare(
+               %Range{lower: nil, upper: @upper},
+               %Range{lower: @lower, upper: @upper}
+             ) == :lt
+
+      assert Range.compare(
+               %Range{lower: @lower, upper: nil},
+               %Range{lower: @lower, upper: @upper}
+             ) == :gt
+    end
+
+    test "the wider bound sorts first when two bounds hold the same value" do
+      assert Range.compare(
+               %Range{lower: @lower, upper: @upper, bounds: :"[)"},
+               %Range{lower: @lower, upper: @upper, bounds: :"()"}
+             ) == :lt
+
+      assert Range.compare(
+               %Range{lower: @lower, upper: @upper, bounds: :"[)"},
+               %Range{lower: @lower, upper: @upper, bounds: :"[]"}
+             ) == :lt
+    end
+
+    test "the empty range sorts below everything and equals itself" do
+      empty = %Range{lower: @lower, upper: @lower, bounds: :"[)"}
+      other_empty = %Range{lower: @upper, upper: @upper, bounds: :"(]"}
+
+      assert Range.compare(empty, other_empty) == :eq
+      assert Range.compare(empty, %Range{lower: nil, upper: nil, bounds: :"()"}) == :lt
+    end
+
+    test "orders date ranges through Comp, not term order" do
+      earlier = %Range{lower: ~D[2019-01-01], upper: ~D[2019-12-31], bounds: :"[]"}
+      later = %Range{lower: ~D[2020-01-01], upper: ~D[2020-12-31], bounds: :"[)"}
+
+      # Term order compares `bounds` before `lower`, which puts these the wrong
+      # way around; `Comp` must not inherit that.
+      assert Enum.sort([later, earlier]) == [later, earlier]
+      assert Comp.compare(later, earlier) == :gt
+      assert Enum.sort([later, earlier], Range) == [earlier, later]
+    end
+
+    test "Comp routes through the comparable rather than falling back" do
+      assert Comparable.impl_for(%Comparable.Type.Ash.Range.To.Ash.Range{
+               left: %Range{},
+               right: %Range{}
+             })
+    end
+  end
+
+  describe "empty?/1" do
+    test "a bounded range with no points is empty" do
+      assert Range.empty?(%Range{lower: 5, upper: 5, bounds: :"[)"})
+      assert Range.empty?(%Range{lower: 5, upper: 5, bounds: :"(]"})
+      assert Range.empty?(%Range{lower: 9, upper: 5, bounds: :"[)"})
+    end
+
+    test "a single point and any unbounded end are not empty" do
+      refute Range.empty?(%Range{lower: 5, upper: 5, bounds: :"[]"})
+      refute Range.empty?(%Range{lower: nil, upper: nil, bounds: :"()"})
+      refute Range.empty?(%Range{lower: 1, upper: nil, bounds: :"[)"})
+    end
   end
 end
