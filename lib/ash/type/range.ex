@@ -5,6 +5,9 @@
 defmodule Ash.Type.Range do
   @inner_types [:date, :integer, :naive_datetime, :datetime]
 
+  # Both spellings, taken from the value module so the two cannot drift apart.
+  @bounds Ash.Range.valid_bounds()
+
   @constraints [
     inner_type: [
       type: {:one_of, @inner_types},
@@ -15,6 +18,12 @@ defmodule Ash.Type.Range do
       type: :keyword_list,
       default: [],
       doc: "Constraints applied to each bound, passed through to the inner type."
+    ],
+    bounds: [
+      type: {:in, @bounds},
+      doc: """
+      The bounds form every value must use, as notation (`:"[)"`) or by name (`:inclusive_exclusive`); omit to admit any. Confining an attribute to one form is what lets its ranges tile without overlapping or leaving gaps (see `Ash.Range`). Note that for a discrete inner type several forms denote the same set, and one outside the constraint is refused rather than canonicalised.
+      """
     ]
   ]
 
@@ -138,8 +147,25 @@ defmodule Ash.Type.Range do
 
     with {:ok, lower} <- apply_bound(type, lower, inner),
          {:ok, upper} <- apply_bound(type, upper, inner),
-         :ok <- check_order(lower, upper) do
+         :ok <- check_order(lower, upper),
+         :ok <- check_bounds(range.bounds, constraints[:bounds]) do
       {:ok, %{range | lower: lower, upper: upper}}
+    end
+  end
+
+  defp check_bounds(_bounds, nil), do: :ok
+
+  defp check_bounds(bounds, required) do
+    # Either side may be given in either spelling, so both are compared — and
+    # reported — as notation.
+    required = Range.notation(required)
+
+    if Range.notation(bounds) == required do
+      :ok
+    else
+      {:error,
+       message: "range bounds must be %{required}, got %{bounds}",
+       vars: [required: inspect(required), bounds: inspect(bounds)]}
     end
   end
 
@@ -188,8 +214,12 @@ defmodule Ash.Type.Range do
 
   defp extract(_), do: {:error, "is not a valid range"}
 
-  defp normalize_bounds(bounds) when is_atom(bounds), do: bounds
-  defp normalize_bounds(bounds) when is_binary(bounds), do: String.to_existing_atom(bounds)
+  # Both spellings are accepted; the struct always carries the notation, so a
+  # consumer matching on `bounds` sees one representation regardless.
+  defp normalize_bounds(bounds) when is_atom(bounds), do: Range.notation(bounds)
+
+  defp normalize_bounds(bounds) when is_binary(bounds),
+    do: bounds |> String.to_existing_atom() |> Range.notation()
 
   defp cast_bound(nil, _fun, _constraints), do: {:ok, nil}
 
