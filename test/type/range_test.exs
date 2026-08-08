@@ -227,4 +227,139 @@ defmodule Ash.Type.RangeTest do
       refute Ash.Range.contains?(range, ~U[2026-03-02 00:00:00Z])
     end
   end
+
+  describe "bounds names" do
+    # Names are an alternative spelling, not a replacement: whichever is given,
+    # the struct carries the notation, so nothing matching on `bounds` changes.
+    test "a name casts to its notation" do
+      for {name, notation} <- [
+            inclusive_exclusive: :"[)",
+            inclusive_inclusive: :"[]",
+            exclusive_exclusive: :"()",
+            exclusive_inclusive: :"(]"
+          ] do
+        {:ok, range} =
+          Ash.Type.cast_input(
+            Ash.Type.Range,
+            %{lower: @lower, upper: @upper, bounds: name},
+            @constraints
+          )
+
+        assert range.bounds == notation
+      end
+    end
+
+    test "notation is unchanged, so existing callers are unaffected" do
+      {:ok, range} =
+        Ash.Type.cast_input(
+          Ash.Type.Range,
+          %{lower: @lower, upper: @upper, bounds: :"[]"},
+          @constraints
+        )
+
+      assert range.bounds == :"[]"
+    end
+
+    test "both spellings answer the inclusivity questions identically" do
+      assert Range.lower_inclusive?(:inclusive_exclusive) == Range.lower_inclusive?(:"[)")
+      assert Range.upper_inclusive?(:exclusive_inclusive) == Range.upper_inclusive?(:"(]")
+      refute Range.upper_inclusive?(:inclusive_exclusive)
+      assert Range.upper_inclusive?(:inclusive_inclusive)
+    end
+
+    test "valid_bounds?/1 accepts either spelling and rejects anything else" do
+      assert Range.valid_bounds?(:"[)")
+      assert Range.valid_bounds?(:inclusive_exclusive)
+      refute Range.valid_bounds?(:half_open)
+    end
+  end
+
+  describe "the bounds constraint" do
+    test "omitting it admits any bounds" do
+      for bounds <- Range.valid_bounds() do
+        assert {:ok, _} =
+                 Ash.Type.cast_input(
+                   Ash.Type.Range,
+                   %{lower: @lower, upper: @upper, bounds: bounds},
+                   @constraints
+                 )
+                 |> then(fn {:ok, r} ->
+                   Ash.Type.apply_constraints(Ash.Type.Range, r, @constraints)
+                 end)
+      end
+    end
+
+    test "a permitted form passes and a refused one fails" do
+      {:ok, constraints} =
+        Ash.Type.init(Ash.Type.Range, inner_type: :datetime, bounds: :inclusive_exclusive)
+
+      {:ok, ok} =
+        Ash.Type.cast_input(
+          Ash.Type.Range,
+          %{lower: @lower, upper: @upper, bounds: :"[)"},
+          constraints
+        )
+
+      assert {:ok, _} = Ash.Type.apply_constraints(Ash.Type.Range, ok, constraints)
+
+      {:ok, bad} =
+        Ash.Type.cast_input(
+          Ash.Type.Range,
+          %{lower: @lower, upper: @upper, bounds: :"[]"},
+          constraints
+        )
+
+      assert {:error, _} = Ash.Type.apply_constraints(Ash.Type.Range, bad, constraints)
+    end
+
+    test "the constraint and the value may use different spellings" do
+      # Declared by name, value given as notation.
+      {:ok, constraints} =
+        Ash.Type.init(Ash.Type.Range, inner_type: :datetime, bounds: :inclusive_exclusive)
+
+      {:ok, range} =
+        Ash.Type.cast_input(
+          Ash.Type.Range,
+          %{lower: @lower, upper: @upper, bounds: :"[)"},
+          constraints
+        )
+
+      assert {:ok, _} = Ash.Type.apply_constraints(Ash.Type.Range, range, constraints)
+
+      # Declared as notation, value given by name.
+      {:ok, notation_constraints} =
+        Ash.Type.init(Ash.Type.Range, inner_type: :datetime, bounds: :"[)")
+
+      {:ok, named} =
+        Ash.Type.cast_input(
+          Ash.Type.Range,
+          %{lower: @lower, upper: @upper, bounds: :inclusive_exclusive},
+          notation_constraints
+        )
+
+      assert {:ok, _} = Ash.Type.apply_constraints(Ash.Type.Range, named, notation_constraints)
+    end
+
+    test "the constraint is a single form, not a set" do
+      # A set would permit mixing within one attribute, and mixing is what makes
+      # meeting depend on position rather than on the range itself.
+      assert {:error, _} =
+               Ash.Type.init(Ash.Type.Range,
+                 inner_type: :datetime,
+                 bounds: [:inclusive_exclusive, :inclusive_inclusive]
+               )
+    end
+
+    test "a discrete range is refused rather than canonicalised" do
+      # [1,4] and [1,5) are the same set of integers. Postgres would convert;
+      # this refuses, which is a divergence worth knowing about.
+      {:ok, constraints} =
+        Ash.Type.init(Ash.Type.Range, inner_type: :integer, bounds: :inclusive_exclusive)
+
+      {:ok, equivalent} =
+        Ash.Type.cast_input(Ash.Type.Range, %{lower: 1, upper: 4, bounds: :"[]"}, constraints)
+
+      assert {:error, _} = Ash.Type.apply_constraints(Ash.Type.Range, equivalent, constraints)
+    end
+  end
 end

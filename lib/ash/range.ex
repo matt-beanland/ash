@@ -11,33 +11,59 @@ defmodule Ash.Range do
   `[` / `]` inclusive, `(` / `)` exclusive. A `nil` `lower`/`upper` is an
   unbounded (infinite) end. The default `:"[)"` (lower-inclusive, upper-exclusive)
   is the convention that lets adjacent ranges tile a timeline without overlap.
+
+  Each form may also be named, lower end then upper: `:inclusive_exclusive`,
+  `:inclusive_inclusive`, `:exclusive_exclusive` and `:exclusive_inclusive`. A name
+  is accepted anywhere the notation is; the struct always carries the notation.
   """
 
-  @type bounds :: :"[)" | :"[]" | :"()" | :"(]"
+  @type notation :: :"[)" | :"[]" | :"()" | :"(]"
+  @type name ::
+          :inclusive_exclusive
+          | :inclusive_inclusive
+          | :exclusive_exclusive
+          | :exclusive_inclusive
+  @type bounds :: notation() | name()
 
   @type t :: %__MODULE__{
           lower: term() | nil,
           upper: term() | nil,
-          bounds: bounds()
+          bounds: notation()
         }
 
   defstruct lower: nil, upper: nil, bounds: :"[)"
 
   @valid_bounds [:"[)", :"[]", :"()", :"(]"]
 
-  @doc "Whether the given atom is a valid bounds specifier."
+  @names %{
+    inclusive_exclusive: :"[)",
+    inclusive_inclusive: :"[]",
+    exclusive_exclusive: :"()",
+    exclusive_inclusive: :"(]"
+  }
+
+  @doc "Every bounds specifier, in both spellings."
+  @spec valid_bounds() :: [bounds()]
+  def valid_bounds, do: @valid_bounds ++ Map.keys(@names)
+
+  @doc "Whether the given atom is a valid bounds specifier, in either spelling."
   @spec valid_bounds?(term()) :: boolean()
-  def valid_bounds?(bounds), do: bounds in @valid_bounds
+  def valid_bounds?(bounds), do: bounds in @valid_bounds or is_map_key(@names, bounds)
+
+  @doc "The notation for a bounds specifier given in either spelling."
+  @spec notation(bounds()) :: notation()
+  def notation(bounds) when is_map_key(@names, bounds), do: Map.fetch!(@names, bounds)
+  def notation(bounds), do: bounds
 
   @doc "Whether the range's lower bound includes its own value (`[`)."
   @spec lower_inclusive?(t() | bounds()) :: boolean()
   def lower_inclusive?(%__MODULE__{bounds: bounds}), do: lower_inclusive?(bounds)
-  def lower_inclusive?(bounds), do: bounds in [:"[)", :"[]"]
+  def lower_inclusive?(bounds), do: notation(bounds) in [:"[)", :"[]"]
 
   @doc "Whether the range's upper bound includes its own value (`]`)."
   @spec upper_inclusive?(t() | bounds()) :: boolean()
   def upper_inclusive?(%__MODULE__{bounds: bounds}), do: upper_inclusive?(bounds)
-  def upper_inclusive?(bounds), do: bounds in [:"(]", :"[]"]
+  def upper_inclusive?(bounds), do: notation(bounds) in [:"(]", :"[]"]
 
   @doc """
   Whether the range contains no points.

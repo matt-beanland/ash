@@ -65,6 +65,6 @@ defmodule Ash.Query.Function.RangeOverlaps do
 
   defp empty?(_range), do: false
 
-  defp lower_inclusive?(bounds), do: bounds in [:"[)", :"[]"]
-  defp upper_inclusive?(bounds), do: bounds in [:"(]", :"[]"]
+  defp lower_inclusive?(bounds), do: Range.lower_inclusive?(bounds)
+  defp upper_inclusive?(bounds), do: Range.upper_inclusive?(bounds)
 end
