@@ -488,6 +488,45 @@ defmodule Ash.TemporalTest do
                    end
     end
 
+    test "as_of_matches/3 narrows records, so a data layer need not rebuild it" do
+      period = %Ash.Range{
+        lower: ~U[2020-01-01 00:00:00Z],
+        upper: ~U[2021-01-01 00:00:00Z],
+        bounds: :"[)"
+      }
+
+      records = [%{valid_at: period}]
+      narrow = &Ash.Filter.Runtime.as_of_matches(records, EtsVersioned, &1)
+
+      assert [_] = narrow.(~U[2020-06-01 00:00:00Z])
+      assert [] = narrow.(~U[2019-06-01 00:00:00Z])
+
+      # Half-open: the lower bound is held, the upper is not, which is what lets
+      # the next period start exactly where this one ends.
+      assert [_] = narrow.(~U[2020-01-01 00:00:00Z])
+      assert [] = narrow.(~U[2021-01-01 00:00:00Z])
+    end
+
+    test "as_of_matches/3 drops a record carrying no period" do
+      assert [] =
+               Ash.Filter.Runtime.as_of_matches(
+                 [%{valid_at: nil}],
+                 EtsVersioned,
+                 ~U[2020-06-01 00:00:00Z]
+               )
+    end
+
+    test "as_of_matches/3 leaves a non-temporal resource untouched" do
+      records = [%{name: "a"}, %{name: "b"}]
+
+      assert ^records =
+               Ash.Filter.Runtime.as_of_matches(
+                 records,
+                 Ash.Test.Temporal.Thing,
+                 ~U[2020-06-01 00:00:00Z]
+               )
+    end
+
     test "must not be nullable, since a row is valid over some period" do
       assert_raise Spark.Error.DslError, ~r/not to be `allow_nil\? true`/, fn ->
         defmodule NullablePeriod do
