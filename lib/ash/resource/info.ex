@@ -550,6 +550,48 @@ defmodule Ash.Resource.Info do
     end
   end
 
+  @doc """
+  The period attribute of a temporal resource.
+
+  The attribute carries the period's type and constraints, so it is what to read
+  when you need either. Declared for you as a `:datetime` range when the resource
+  does not declare it.
+  """
+  @spec temporal_period(Spark.Dsl.t() | Ash.Resource.t()) :: Ash.Resource.Attribute.t() | nil
+  def temporal_period(resource) do
+    if name = temporal_attribute(resource) do
+      attribute(resource, name)
+    end
+  end
+
+  @doc """
+  The type of a temporal resource's period bounds.
+
+  Resolved, as types are everywhere else in introspection: a period declared with the
+  `:datetime` shorthand reads back as `Ash.Type.DateTime`.
+  """
+  @spec temporal_inner_type(Spark.Dsl.t() | Ash.Resource.t()) :: Ash.Type.t() | nil
+  def temporal_inner_type(resource) do
+    case temporal_period(resource) do
+      %{constraints: constraints} -> constraints[:inner_type]
+      _ -> nil
+    end
+  end
+
+  @doc """
+  The constraints on a temporal resource's period bounds.
+
+  Together with `temporal_inner_type/1`, what casting a point in time against the
+  period requires.
+  """
+  @spec temporal_inner_constraints(Spark.Dsl.t() | Ash.Resource.t()) :: Keyword.t() | nil
+  def temporal_inner_constraints(resource) do
+    case temporal_period(resource) do
+      %{constraints: constraints} -> constraints[:inner_constraints] || []
+      _ -> nil
+    end
+  end
+
   @doc "Returns all pipelines of a resource"
   @spec pipelines(Spark.Dsl.t() | Ash.Resource.t()) :: list(Ash.Resource.Pipeline.t())
   def pipelines(resource) do

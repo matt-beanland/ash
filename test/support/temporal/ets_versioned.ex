@@ -34,9 +34,5 @@ defmodule Ash.Test.Temporal.EtsVersioned do
   attributes do
     attribute :id, :integer, primary_key?: true, allow_nil?: false, public?: true
     attribute :name, :string, public?: true
-
-    attribute :valid_at, Ash.Type.Range,
-      constraints: [inner_type: :datetime],
-      public?: true
   end
 end
