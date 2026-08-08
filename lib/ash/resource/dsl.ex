@@ -1760,7 +1760,11 @@ defmodule Ash.Resource.Dsl do
       attribute: [
         type: :atom,
         default: :valid_at,
-        doc: "The single period (range) attribute, e.g `valid_at`."
+        doc: """
+        The single period (range) attribute, e.g `valid_at`. Declared for you as a
+        `:datetime` range if the resource does not declare it; declare it yourself to
+        choose the inner type or its constraints.
+        """
       ]
     ]
   }
@@ -1786,6 +1790,7 @@ defmodule Ash.Resource.Dsl do
     Ash.Resource.Transformers.ResolvePipelines,
     Ash.Resource.Transformers.RequireUniqueActionNames,
     Ash.Resource.Transformers.SetRelationshipSource,
+    Ash.Resource.Transformers.AddPeriodAttribute,
     Ash.Resource.Transformers.AddTemporalRelationshipFilters,
     Ash.Resource.Transformers.BelongsToAttribute,
     Ash.Resource.Transformers.HasDestinationField,

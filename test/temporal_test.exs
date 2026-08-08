@@ -292,4 +292,245 @@ defmodule Ash.TemporalTest do
       assert [%{name: "open"}] = EtsVersioned |> Ash.read!()
     end
   end
+
+  describe "the period attribute" do
+    alias Ash.Test.Temporal.EtsVersioned
+
+    test "is declared for you when the resource does not declare it" do
+      attribute = Ash.Resource.Info.attribute(EtsVersioned, :valid_at)
+
+      assert attribute.type == Ash.Type.Range
+      assert attribute.constraints[:inner_type] == Ash.Type.DateTime
+      assert Ash.Range.notation(attribute.constraints[:bounds]) == :"[)"
+      refute attribute.allow_nil?
+
+      # Ash's own default for an attribute; declaring the period does not make it
+      # part of the public interface.
+      refute attribute.public?
+    end
+
+    test "the inner type is introspectable, without reaching through the attribute" do
+      assert Ash.Resource.Info.temporal_inner_type(EtsVersioned) == Ash.Type.DateTime
+      assert Ash.Resource.Info.temporal_period(EtsVersioned).name == :valid_at
+      assert Keyword.keyword?(Ash.Resource.Info.temporal_inner_constraints(EtsVersioned))
+      assert is_nil(Ash.Resource.Info.temporal_inner_type(Ash.Test.Temporal.Thing))
+    end
+
+    test "declaring it yourself is how the inner type and its constraints are chosen" do
+      # Temporal reads the attribute rather than restating any of it.
+      defmodule DatePeriod do
+        use Ash.Resource, domain: Ash.Test.Domain, data_layer: Ash.DataLayer.Ets
+
+        temporal do
+          strategy :context
+        end
+
+        attributes do
+          attribute :id, :integer, primary_key?: true, allow_nil?: false
+
+          attribute :valid_at, Ash.Type.Range,
+            allow_nil?: false,
+            constraints: [inner_type: :date, bounds: :inclusive_exclusive]
+        end
+
+        actions do
+          defaults [:read]
+        end
+      end
+
+      assert Ash.Resource.Info.temporal_inner_type(DatePeriod) == Ash.Type.Date
+    end
+
+    test "sub-second detail survives when the attribute asks for it" do
+      defmodule MicrosecondPeriod do
+        use Ash.Resource, domain: Ash.Test.Domain, data_layer: Ash.DataLayer.Ets
+
+        temporal do
+          strategy :context
+        end
+
+        attributes do
+          attribute :id, :integer, primary_key?: true, allow_nil?: false
+
+          attribute :valid_at, Ash.Type.Range,
+            allow_nil?: false,
+            constraints: [
+              inner_type: :datetime,
+              inner_constraints: [precision: :microsecond],
+              bounds: :inclusive_exclusive
+            ]
+        end
+
+        actions do
+          defaults [:read]
+        end
+      end
+
+      instant = ~U[2026-01-01 00:00:00.123456Z]
+      constraints = Ash.Resource.Info.attribute(MicrosecondPeriod, :valid_at).constraints
+
+      {:ok, range} =
+        Ash.Type.cast_input(Ash.Type.Range, %{lower: instant, upper: nil}, constraints)
+
+      {:ok, range} = Ash.Type.apply_constraints(Ash.Type.Range, range, constraints)
+
+      assert range.lower == instant
+    end
+
+    test "a resource may declare every part of the period itself" do
+      defmodule FullyDeclared do
+        use Ash.Resource, domain: Ash.Test.Domain, data_layer: Ash.DataLayer.Ets
+
+        temporal do
+          strategy :context
+          attribute :effective_at
+        end
+
+        attributes do
+          attribute :id, :integer, primary_key?: true, allow_nil?: false
+
+          attribute :effective_at, Ash.Type.Range,
+            allow_nil?: false,
+            public?: true,
+            constraints: [
+              inner_type: :datetime,
+              inner_constraints: [precision: :microsecond],
+              bounds: :inclusive_exclusive
+            ]
+        end
+
+        actions do
+          defaults [:read]
+        end
+      end
+
+      assert Ash.Resource.Info.temporal_attribute(FullyDeclared) == :effective_at
+      assert Ash.Resource.Info.temporal_inner_type(FullyDeclared) == Ash.Type.DateTime
+
+      assert Ash.Resource.Info.temporal_inner_constraints(FullyDeclared)[:precision] ==
+               :microsecond
+
+      attribute = Ash.Resource.Info.temporal_period(FullyDeclared)
+      assert attribute.name == :effective_at
+      assert attribute.public?
+    end
+
+    test "a period declared under a name of the resource's choosing is created there" do
+      defmodule NamedPeriod do
+        use Ash.Resource, domain: Ash.Test.Domain, data_layer: Ash.DataLayer.Ets
+
+        temporal do
+          strategy :context
+          attribute :effective_at
+        end
+
+        attributes do
+          attribute :id, :integer, primary_key?: true, allow_nil?: false
+        end
+
+        actions do
+          defaults [:read]
+        end
+      end
+
+      assert Ash.Resource.Info.temporal_period(NamedPeriod).name == :effective_at
+      assert is_nil(Ash.Resource.Info.attribute(NamedPeriod, :valid_at))
+    end
+
+    test "omitting the bounds constraint is refused, not assumed" do
+      assert_raise Spark.Error.DslError,
+                   ~r/constrain its `bounds` to `:inclusive_exclusive`/,
+                   fn ->
+                     defmodule UnboundedPeriod do
+                       use Ash.Resource, domain: Ash.Test.Domain, data_layer: Ash.DataLayer.Ets
+
+                       temporal do
+                         strategy :context
+                       end
+
+                       attributes do
+                         attribute :id, :integer, primary_key?: true, allow_nil?: false
+
+                         attribute :valid_at, Ash.Type.Range,
+                           allow_nil?: false,
+                           constraints: [inner_type: :datetime]
+                       end
+
+                       actions do
+                         defaults [:read]
+                       end
+                     end
+                   end
+    end
+
+    test "must be inclusive-exclusive" do
+      assert_raise Spark.Error.DslError,
+                   ~r/constrain its `bounds` to `:inclusive_exclusive`/,
+                   fn ->
+                     defmodule ClosedPeriod do
+                       use Ash.Resource, domain: Ash.Test.Domain, data_layer: Ash.DataLayer.Ets
+
+                       temporal do
+                         strategy :context
+                       end
+
+                       attributes do
+                         attribute :id, :integer, primary_key?: true, allow_nil?: false
+
+                         attribute :valid_at, Ash.Type.Range,
+                           constraints: [inner_type: :datetime, bounds: :inclusive_inclusive]
+                       end
+
+                       actions do
+                         defaults [:read]
+                       end
+                     end
+                   end
+    end
+
+    test "must not be nullable, since a row is valid over some period" do
+      assert_raise Spark.Error.DslError, ~r/not to be `allow_nil\? true`/, fn ->
+        defmodule NullablePeriod do
+          use Ash.Resource, domain: Ash.Test.Domain, data_layer: Ash.DataLayer.Ets
+
+          temporal do
+            strategy :context
+          end
+
+          attributes do
+            attribute :id, :integer, primary_key?: true, allow_nil?: false
+
+            attribute :valid_at, Ash.Type.Range,
+              allow_nil?: true,
+              constraints: [inner_type: :datetime, bounds: :inclusive_exclusive]
+          end
+
+          actions do
+            defaults [:read]
+          end
+        end
+      end
+    end
+
+    test "must be a range" do
+      assert_raise Spark.Error.DslError, ~r/to be an `Ash.Type.Range`/, fn ->
+        defmodule NotARangePeriod do
+          use Ash.Resource, domain: Ash.Test.Domain, data_layer: Ash.DataLayer.Ets
+
+          temporal do
+            strategy :context
+          end
+
+          attributes do
+            attribute :id, :integer, primary_key?: true, allow_nil?: false
+            attribute :valid_at, :datetime
+          end
+
+          actions do
+            defaults [:read]
+          end
+        end
+      end
+    end
+  end
 end
