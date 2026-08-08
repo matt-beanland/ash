@@ -1422,17 +1422,7 @@ defmodule Ash.DataLayer.Ets do
   # period holds `as_of`. Non-temporal resources and reads without an `as_of` are
   # untouched, so nothing that does not opt in pays for this.
   defp as_of_records(records, resource, as_of) do
-    with %DateTime{} <- as_of,
-         attribute when not is_nil(attribute) <- Ash.Resource.Info.temporal_attribute(resource) do
-      Enum.filter(records, fn record ->
-        case Map.get(record, attribute) do
-          %Ash.Range{} = period -> Ash.Range.contains?(period, as_of)
-          _ -> false
-        end
-      end)
-    else
-      _ -> records
-    end
+    Ash.Filter.Runtime.as_of_matches(records, resource, as_of)
   end
 
   defp filter_matches(
