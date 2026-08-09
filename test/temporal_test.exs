@@ -293,6 +293,60 @@ defmodule Ash.TemporalTest do
     end
   end
 
+  describe "Ets establishes a period on create" do
+    alias Ash.Test.Temporal.EtsVersioned
+
+    # Every test above seeds its periods, which goes straight to the data layer.
+    # A record created through an action cannot: a transformer refuses a resource
+    # whose period attribute is accepted as action input, so nothing above the data
+    # layer is able to set one. Without the layer establishing it, such a record
+    # carries no period, and `as_of_matches/3` drops exactly those — so an ordinary
+    # create was invisible to every as-of read, including a read with no as_of.
+    # The bound is cast through the period's inner type, and `:datetime` is
+    # second-resolution — so it is truncated, and can precede the wall clock at the
+    # moment of the write by up to a second. Compared at the period's own precision
+    # for that reason: a record is valid from the start of the second it was written
+    # in, not from the microsecond.
+    test "a created record is valid from the write, with no end" do
+      before = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      record =
+        EtsVersioned
+        |> Ash.Changeset.for_create(:create, %{id: 10, name: "made"})
+        |> Ash.create!()
+
+      assert %Ash.Range{lower: lower, upper: nil, bounds: :"[)"} = record.valid_at
+      assert DateTime.compare(lower, before) in [:gt, :eq]
+    end
+
+    test "and is therefore visible to a read, before and after being written" do
+      EtsVersioned
+      |> Ash.Changeset.for_create(:create, %{id: 11, name: "visible"})
+      |> Ash.create!()
+
+      assert [%{name: "visible"}] = EtsVersioned |> Ash.read!()
+
+      assert [%{name: "visible"}] =
+               EtsVersioned |> Ash.Query.as_of(DateTime.utc_now()) |> Ash.read!()
+
+      # Its validity starts at the write, so an earlier instant holds nothing.
+      assert [] = EtsVersioned |> Ash.Query.as_of(~U[2020-01-01 00:00:00Z]) |> Ash.read!()
+    end
+
+    test "an explicit as_of anchors the period rather than the layer's clock" do
+      as_of = ~U[2022-03-04 05:06:07Z]
+
+      record =
+        EtsVersioned
+        |> Ash.Changeset.for_create(:create, %{id: 12, name: "pinned"})
+        |> Ash.Changeset.as_of(as_of)
+        |> Ash.create!()
+
+      assert %Ash.Range{lower: ^as_of, upper: nil} = record.valid_at
+      assert [%{name: "pinned"}] = EtsVersioned |> Ash.Query.as_of(as_of) |> Ash.read!()
+    end
+  end
+
   describe "the period attribute" do
     alias Ash.Test.Temporal.EtsVersioned
 

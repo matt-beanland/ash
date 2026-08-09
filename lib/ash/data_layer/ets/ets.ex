@@ -1728,6 +1728,7 @@ defmodule Ash.DataLayer.Ets do
          _ <- if(!from_bulk_create?, do: log_create(resource, changeset)),
          {:ok, record} <- Ash.Changeset.apply_attributes(changeset),
          {:ok, record} <- apply_atomics(changeset, resource, record),
+         {:ok, record} <- establish_period(record, resource, changeset),
          record <- unload_relationships(resource, record),
          {:ok, record} <- put_or_insert_new(table, {pkey, record}, resource) do
       {:ok, set_loaded(record)}
@@ -1748,6 +1749,87 @@ defmodule Ash.DataLayer.Ets do
   end
 
   defp apply_atomics(_changeset, _resource, record), do: {:ok, record}
+
+  # A created record of a temporal resource is valid from the instant the write
+  # takes effect, with no end: `[as_of, ∞)`.
+  #
+  # The instant is resolved here, on this layer's own clock, because that is what
+  # core hands over. `Ash.Changeset.as_of/2` documents that a `:now`/`nil` write is
+  # anchored at the data layer's clock, and `Ash.Actions.Helpers.put_write_as_of/3`
+  # deliberately declines to stamp one — a core `now()` resolved slightly earlier
+  # could sit before the record's own validity and make a reload miss the write that
+  # just happened.
+  #
+  # A period the caller wrote is left alone. Saying when a record was valid is not
+  # the same as saying when it was written, and only the second is ours to supply.
+  defp establish_period(record, resource, changeset) do
+    case Ash.Resource.Info.temporal_attribute(resource) do
+      nil ->
+        {:ok, record}
+
+      attribute ->
+        {:ok,
+         put_established_period(
+           record,
+           attribute,
+           Map.get(record, attribute),
+           resource,
+           changeset
+         )}
+    end
+  end
+
+  defp put_established_period(record, _attribute, %Ash.Range{}, _resource, _changeset), do: record
+
+  defp put_established_period(record, attribute, nil, resource, changeset) do
+    case write_instant(resource, changeset) do
+      {:ok, as_of} -> Map.put(record, attribute, %Ash.Range{lower: as_of})
+      :error -> record
+    end
+  end
+
+  defp put_established_period(record, _attribute, _other, _resource, _changeset), do: record
+
+  # `nil` and `:now` both mean "the instant of this write", resolved on this
+  # layer's clock. Only a period over a temporal type has a now — one over
+  # integers does not, so such a resource writes its own bound or gets none.
+  #
+  # The instant is cast through the period's own inner type, which is what
+  # settles precision: `:datetime` is second-resolution, so an untruncated
+  # `DateTime.utc_now/0` would be refused on the way to storage.
+  defp write_instant(resource, changeset) do
+    inner_type = Ash.Resource.Info.temporal_inner_type(resource)
+
+    with {:ok, raw} <- raw_instant(changeset, inner_type),
+         {:ok, instant} <-
+           Ash.Type.cast_input(
+             inner_type,
+             raw,
+             Ash.Resource.Info.temporal_inner_constraints(resource) || []
+           ) do
+      {:ok, instant}
+    else
+      _ -> :error
+    end
+  end
+
+  defp raw_instant(%{as_of: %DateTime{} = as_of}, _inner_type), do: {:ok, as_of}
+
+  defp raw_instant(%{as_of: as_of}, inner_type) when as_of in [nil, :now],
+    do: now_for(inner_type)
+
+  defp raw_instant(_changeset, _inner_type), do: :error
+
+  defp now_for(inner_type) when inner_type in [:datetime, Ash.Type.UtcDatetime],
+    do: {:ok, DateTime.utc_now()}
+
+  defp now_for(inner_type) when inner_type in [:naive_datetime, Ash.Type.NaiveDatetime],
+    do: {:ok, NaiveDateTime.utc_now()}
+
+  defp now_for(inner_type) when inner_type in [:date, Ash.Type.Date],
+    do: {:ok, Date.utc_today()}
+
+  defp now_for(_inner_type), do: :error
 
   defp set_loaded(%resource{} = record) do
     %{record | __meta__: %Ecto.Schema.Metadata{state: :loaded, schema: resource}}
