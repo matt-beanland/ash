@@ -257,13 +257,10 @@ defmodule Ash.TemporalTest do
     @open %Ash.Range{lower: ~U[2021-01-01 00:00:00Z], upper: nil, bounds: :"[)"}
 
     setup do
-      # ⚠️ Distinct ids, deliberately. `Ash.DataLayer.Ets` keys its table by the
-      # resource's primary key alone (`pkey_map/2`), so two versions of ONE record
-      # collide and the second overwrites the first. Storing several versions of a
-      # record needs the period in the storage key, which is not done yet — these
-      # tests cover the as-of narrowing, not multi-version storage.
+      # Two versions of ONE record: the same primary key, adjacent periods. Both
+      # survive because the period is part of the storage key.
       Ash.Seed.seed!(%EtsVersioned{id: 1, name: "early", valid_at: @early})
-      Ash.Seed.seed!(%EtsVersioned{id: 2, name: "open", valid_at: @open})
+      Ash.Seed.seed!(%EtsVersioned{id: 1, name: "open", valid_at: @open})
       :ok
     end
 
@@ -288,6 +285,44 @@ defmodule Ash.TemporalTest do
 
     test "a read with no as_of is anchored to now, so it sees current state" do
       assert [%{name: "open"}] = EtsVersioned |> Ash.read!()
+    end
+  end
+
+  describe "Ets keys a temporal record by its period" do
+    alias Ash.Test.Temporal.EtsVersioned
+
+    test "the period joins the key of a temporal resource, and only there" do
+      record = %EtsVersioned{id: 1, name: "x", valid_at: @open}
+
+      assert Ash.DataLayer.Ets.pkey_map(EtsVersioned, record) == %{id: 1, valid_at: @open}
+      assert Ash.DataLayer.Ets.pkey_map(Thing, %{id: "abc", name: "y"}) == %{id: "abc"}
+    end
+
+    # Keyed on the primary key alone, the second write lands on the first and the
+    # earlier version is gone — so the store could only ever hold current state.
+    test "two versions of one record are stored side by side" do
+      Ash.Seed.seed!(%EtsVersioned{id: 1, name: "early", valid_at: @early})
+      Ash.Seed.seed!(%EtsVersioned{id: 1, name: "open", valid_at: @open})
+
+      assert [%{id: 1, name: "early"}] =
+               EtsVersioned |> Ash.Query.as_of(~U[2020-06-01 00:00:00Z]) |> Ash.read!()
+
+      assert [%{id: 1, name: "open"}] =
+               EtsVersioned |> Ash.Query.as_of(~U[2026-06-01 00:00:00Z]) |> Ash.read!()
+    end
+
+    # A version is addressable, which is what makes it a record rather than a
+    # projection of one: destroying it takes that period and nothing else.
+    test "destroying one version leaves the others" do
+      early = Ash.Seed.seed!(%EtsVersioned{id: 1, name: "early", valid_at: @early})
+      Ash.Seed.seed!(%EtsVersioned{id: 1, name: "open", valid_at: @open})
+
+      Ash.destroy!(early)
+
+      assert [] = EtsVersioned |> Ash.Query.as_of(~U[2020-06-01 00:00:00Z]) |> Ash.read!()
+
+      assert [%{name: "open"}] =
+               EtsVersioned |> Ash.Query.as_of(~U[2026-06-01 00:00:00Z]) |> Ash.read!()
     end
   end
 

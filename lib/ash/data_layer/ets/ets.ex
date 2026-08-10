@@ -1538,7 +1538,7 @@ defmodule Ash.DataLayer.Ets do
             resource
             |> update(
               %{changeset | action_type: :update, filter: nil},
-              Map.take(result, pkey),
+              pkey_map(resource, result),
               from_bulk_create?
             )
             |> set_upsert_action(:update)
@@ -1680,7 +1680,7 @@ defmodule Ash.DataLayer.Ets do
     else
       with {:ok, table} <- wrap_or_create_table(resource, options.tenant) do
         Enum.reduce_while(stream, {:ok, []}, fn changeset, {:ok, results} ->
-          with {:ok, pkey} <- get_valid_pkey(resource, changeset),
+          with :ok <- validate_pkey(resource, changeset),
                {:ok, record} <- Ash.Changeset.apply_attributes(changeset),
                {:ok, record} <- apply_atomics(changeset, resource, record),
                {:ok, record} <- establish_period(record, resource, changeset),
@@ -1688,8 +1688,8 @@ defmodule Ash.DataLayer.Ets do
             {:cont,
              {:ok,
               [
-                {pkey, changeset.context.bulk_create.index, changeset.context.bulk_create.ref,
-                 record}
+                {pkey_map(resource, record), changeset.context.bulk_create.index,
+                 changeset.context.bulk_create.ref, record}
                 | results
               ]}}
           else
@@ -1724,14 +1724,15 @@ defmodule Ash.DataLayer.Ets do
   @doc false
   @impl true
   def create(resource, changeset, from_bulk_create? \\ false) do
-    with {:ok, pkey} <- get_valid_pkey(resource, changeset),
+    with :ok <- validate_pkey(resource, changeset),
          {:ok, table} <- wrap_or_create_table(resource, changeset.tenant),
          _ <- if(!from_bulk_create?, do: log_create(resource, changeset)),
          {:ok, record} <- Ash.Changeset.apply_attributes(changeset),
          {:ok, record} <- apply_atomics(changeset, resource, record),
          {:ok, record} <- establish_period(record, resource, changeset),
          record <- unload_relationships(resource, record),
-         {:ok, record} <- put_or_insert_new(table, {pkey, record}, resource) do
+         {:ok, record} <-
+           put_or_insert_new(table, {pkey_map(resource, record), record}, resource) do
       {:ok, set_loaded(record)}
     else
       {:error, error} -> {:error, error}
@@ -1905,7 +1906,11 @@ defmodule Ash.DataLayer.Ets do
     end
   end
 
-  defp get_valid_pkey(resource, changeset) do
+  # A record's primary key must be complete before anything is stored under it.
+  # The key itself is taken from the record rather than from the changeset,
+  # because on a temporal resource part of it — the period — is established here
+  # rather than supplied by the caller.
+  defp validate_pkey(resource, changeset) do
     pkey =
       resource
       |> Ash.Resource.Info.primary_key()
@@ -1916,7 +1921,7 @@ defmodule Ash.DataLayer.Ets do
     if !Enum.empty?(pkey) && Enum.any?(pkey, fn {_, v} -> is_nil(v) end) do
       {:error, InvalidPrimaryKey.exception(resource: resource, value: pkey)}
     else
-      {:ok, pkey}
+      :ok
     end
   end
 
@@ -2011,7 +2016,7 @@ defmodule Ash.DataLayer.Ets do
 
   defp do_destroy(resource, record, tenant, filter, domain, actor) do
     with {:ok, table} <- wrap_or_create_table(resource, tenant) do
-      pkey = Map.take(record, Ash.Resource.Info.primary_key(resource))
+      pkey = pkey_map(resource, record)
 
       if has_filter?(filter) do
         case ETS.Set.get(table, pkey) do
@@ -2164,13 +2169,27 @@ defmodule Ash.DataLayer.Ets do
     end
   end
 
+  # The key a record is stored under is what makes two writes the same record.
+  # Ordinarily that is the primary key. On a temporal resource it is the primary
+  # key together with the period: versions of one record share a primary key and
+  # differ only in when they were valid, so keying on the primary key alone would
+  # have each version overwrite the one before it.
   @doc false
   def pkey_map(resource, data) do
     resource
-    |> Ash.Resource.Info.primary_key()
+    |> key_fields()
     |> Enum.into(%{}, fn attr ->
       {attr, Map.get(data, attr)}
     end)
+  end
+
+  defp key_fields(resource) do
+    primary_key = Ash.Resource.Info.primary_key(resource)
+
+    case Ash.Resource.Info.temporal_attribute(resource) do
+      nil -> primary_key
+      period -> primary_key ++ [period]
+    end
   end
 
   defp do_update(
