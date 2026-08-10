@@ -1684,7 +1684,14 @@ defmodule Ash.DataLayer.Ets do
                {:ok, record} <- Ash.Changeset.apply_attributes(changeset),
                {:ok, record} <- apply_atomics(changeset, resource, record),
                {:ok, record} <- establish_period(record, resource, changeset),
-               record <- unload_relationships(resource, record) do
+               record <- unload_relationships(resource, record),
+               :ok <-
+                 check_non_overlapping(
+                   table,
+                   resource,
+                   record,
+                   Enum.map(results, fn {key, _index, _ref, _record} -> key end)
+                 ) do
             {:cont,
              {:ok,
               [
@@ -1731,6 +1738,7 @@ defmodule Ash.DataLayer.Ets do
          {:ok, record} <- apply_atomics(changeset, resource, record),
          {:ok, record} <- establish_period(record, resource, changeset),
          record <- unload_relationships(resource, record),
+         :ok <- check_non_overlapping(table, resource, record),
          {:ok, record} <-
            put_or_insert_new(table, {pkey_map(resource, record), record}, resource) do
       {:ok, set_loaded(record)}
@@ -1778,6 +1786,57 @@ defmodule Ash.DataLayer.Ets do
            resource,
            changeset
          )}
+    end
+  end
+
+  # Two versions of one record must not both hold an instant. An as-of read is a
+  # point in time and expects the one version valid then, so a pair that overlaps
+  # does not merely store an untruth — it makes the read answer with two records
+  # where the resource has one. Keying by the period is what made that reachable:
+  # before it, a colliding write simply replaced its predecessor.
+  #
+  # ⚠️ This is a look followed by a write on a layer with no transactions, so two
+  # creates racing can both find nothing and both land. Non-overlap here is a
+  # contract stated and checked, not a lock — which is the point of expressing
+  # these semantics on a layer that has no transaction to hide behind.
+  #
+  # `extra` carries versions not in the table yet: a bulk create must not overlap
+  # its own earlier records either.
+  defp check_non_overlapping(table, resource, record, extra \\ []) do
+    with period when not is_nil(period) <- Ash.Resource.Info.temporal_attribute(resource),
+         %Ash.Range{} = period_value <- Map.get(record, period),
+         {:ok, keys} <- stored_keys(table) do
+      primary_key = Map.take(record, Ash.Resource.Info.primary_key(resource))
+
+      if Enum.any?(keys ++ extra, &overlapping?(&1, primary_key, period, period_value)) do
+        {:error,
+         Ash.Error.Changes.InvalidAttribute.exception(
+           field: period,
+           value: period_value,
+           message: "overlaps the period of an existing version of this record"
+         )}
+      else
+        :ok
+      end
+    else
+      {:error, error} -> {:error, error}
+      _ -> :ok
+    end
+  end
+
+  # A stored key holds the primary key and the period together, so a version is
+  # recognised as another version of the same record, and compared, without
+  # reading its data back.
+  defp overlapping?(key, primary_key, period, period_value) do
+    Map.take(key, Map.keys(primary_key)) == primary_key and
+      match?(%Ash.Range{}, Map.get(key, period)) and
+      Ash.Range.overlaps?(Map.get(key, period), period_value)
+  end
+
+  defp stored_keys(table) do
+    case ETS.Set.to_list(table) do
+      {:ok, stored} -> {:ok, Enum.map(stored, fn {key, _data} -> key end)}
+      {:error, error} -> {:error, error}
     end
   end
 

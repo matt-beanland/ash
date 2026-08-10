@@ -392,6 +392,78 @@ defmodule Ash.TemporalTest do
     end
   end
 
+  describe "Ets refuses versions of one record that overlap" do
+    alias Ash.Test.Temporal.EtsVersioned
+
+    defp create_at(id, name, as_of) do
+      EtsVersioned
+      |> Ash.Changeset.for_create(:create, %{id: id, name: name})
+      |> Ash.Changeset.as_of(as_of)
+      |> Ash.create()
+    end
+
+    # Both creates open a period with no end, so the later one holds every instant
+    # the earlier one does from its own start onwards. An as-of read there would
+    # answer with two records for a resource that has one.
+    test "a second open-ended version of one record is refused" do
+      assert {:ok, _} = create_at(1, "first", ~U[2020-01-01 00:00:00Z])
+
+      assert {:error, %Ash.Error.Invalid{errors: [%Ash.Error.Changes.InvalidAttribute{} = error]}} =
+               create_at(1, "second", ~U[2021-01-01 00:00:00Z])
+
+      assert error.field == :valid_at
+      assert error.message =~ "overlaps the period of an existing version"
+
+      assert [%{name: "first"}] =
+               EtsVersioned |> Ash.Query.as_of(~U[2021-06-01 00:00:00Z]) |> Ash.read!()
+    end
+
+    test "adjacent versions of one record are accepted, since they share no instant" do
+      Ash.Seed.seed!(%EtsVersioned{id: 1, name: "early", valid_at: @early})
+
+      assert {:ok, _} = create_at(1, "later", ~U[2021-01-01 00:00:00Z])
+
+      assert [%{name: "early"}] =
+               EtsVersioned |> Ash.Query.as_of(~U[2020-06-01 00:00:00Z]) |> Ash.read!()
+
+      assert [%{name: "later"}] =
+               EtsVersioned |> Ash.Query.as_of(~U[2021-06-01 00:00:00Z]) |> Ash.read!()
+    end
+
+    test "another record's overlapping period is no concern of this one's" do
+      assert {:ok, _} = create_at(1, "one", ~U[2020-01-01 00:00:00Z])
+      assert {:ok, _} = create_at(2, "two", ~U[2020-01-01 00:00:00Z])
+    end
+
+    test "a bulk create must not overlap what is already stored" do
+      Ash.Seed.seed!(%EtsVersioned{id: 1, name: "open", valid_at: @open})
+
+      assert %Ash.BulkResult{status: :error, errors: [error]} =
+               Ash.bulk_create([%{id: 1, name: "clash"}], EtsVersioned, :create,
+                 return_errors?: true
+               )
+
+      assert %Ash.Error.Invalid{errors: [%Ash.Error.Changes.InvalidAttribute{field: :valid_at}]} =
+               error
+    end
+
+    # Nothing in the batch is stored until the batch is written, so a batch that
+    # clashes with itself has nothing to be compared against unless the records
+    # already accepted are carried along.
+    test "nor overlap its own earlier records" do
+      assert %Ash.BulkResult{status: :error, errors: [error]} =
+               Ash.bulk_create(
+                 [%{id: 1, name: "first"}, %{id: 1, name: "second"}],
+                 EtsVersioned,
+                 :create,
+                 return_errors?: true
+               )
+
+      assert %Ash.Error.Invalid{errors: [%Ash.Error.Changes.InvalidAttribute{field: :valid_at}]} =
+               error
+    end
+  end
+
   describe "Ets supersedes a version on update" do
     alias Ash.Test.Temporal.EtsVersioned
 
