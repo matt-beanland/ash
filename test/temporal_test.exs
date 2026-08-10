@@ -272,8 +272,8 @@ defmodule Ash.TemporalTest do
                EtsVersioned |> Ash.Query.as_of(~U[2026-06-01 00:00:00Z]) |> Ash.read!()
     end
 
-    # The half-open rule at the seam: the instant the two periods share belongs
-    # to the later one only.
+    # The inclusive-exclusive rule at the seam: the instant the two periods share
+    # belongs to the later one only.
     test "a shared boundary belongs to the later period" do
       assert [%{name: "open"}] =
                EtsVersioned |> Ash.Query.as_of(~U[2021-01-01 00:00:00Z]) |> Ash.read!()
@@ -780,8 +780,8 @@ defmodule Ash.TemporalTest do
       assert [_] = narrow.(~U[2020-06-01 00:00:00Z])
       assert [] = narrow.(~U[2019-06-01 00:00:00Z])
 
-      # Half-open: the lower bound is held, the upper is not, which is what lets
-      # the next period start exactly where this one ends.
+      # Inclusive-exclusive: the lower bound is held, the upper is not, which is
+      # what lets the next period start exactly where this one ends.
       assert [_] = narrow.(~U[2020-01-01 00:00:00Z])
       assert [] = narrow.(~U[2021-01-01 00:00:00Z])
     end
