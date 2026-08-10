@@ -22,8 +22,7 @@ defmodule Ash.Query.Function.RangeOverlaps do
   def evaluate(%{arguments: [nil, _]}), do: {:known, nil}
   def evaluate(%{arguments: [_, nil]}), do: {:known, nil}
 
-  # Overlap is a fact about two ranges, so it is `Ash.Range`'s to answer — this
-  # function is the expression that asks. Matches the Postgres `&&` operator.
+  # Overlap is a fact about two ranges, so `Ash.Range` answers it. Postgres `&&`.
   def evaluate(%{arguments: [%Range{} = left, %Range{} = right]}) do
     {:known, Range.overlaps?(left, right)}
   end

@@ -82,11 +82,8 @@ defmodule Ash.Type.RangeTest do
   end
 
   describe "ordering" do
-    # Every expectation below is the order PostgreSQL returns for the equivalent
-    # `tstzrange` values, the type a `:datetime` range maps to. tstzrange is
-    # continuous, so bounds survive as written and inclusivity is observable — a
-    # discrete type like the `int8range` behind an `:integer` range canonicalises
-    # to `[)` first and hides it.
+    # The order PostgreSQL returns for the equivalent `tstzrange` values, where
+    # inclusivity is observable — a discrete `int8range` canonicalises to `[)`.
     @ordered [
       %Range{lower: @upper, upper: @upper, bounds: :"[)"},
       %Range{lower: nil, upper: @upper, bounds: :"()"},
@@ -104,10 +101,8 @@ defmodule Ash.Type.RangeTest do
       assert @ordered |> Enum.shuffle() |> Enum.sort(Range) == @ordered
     end
 
-    # A short period nested inside a longer one, where ordering by lower and
-    # ordering by upper disagree. Without a comparator the generic fallback
-    # compares the structs as maps, whose key order puts `upper` first, so this
-    # came back reversed from what Postgres returns for the same two ranges.
+    # Ordering by lower and by upper disagree here. Without a comparator the generic
+    # fallback compares the structs as maps, whose key order puts `upper` first.
     test "a nested range orders by lower, not upper" do
       short = %Range{lower: @middle, upper: @upper, bounds: :"[)"}
       long = %Range{lower: @lower, upper: @latest, bounds: :"[)"}

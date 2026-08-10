@@ -1419,8 +1419,7 @@ defmodule Ash.DataLayer.Ets do
   end
 
   # A temporal read is a point in time: keep the one version of each record whose
-  # period holds `as_of`. Non-temporal resources and reads without an `as_of` are
-  # untouched, so nothing that does not opt in pays for this.
+  # period holds `as_of`. Non-temporal resources and reads without an `as_of` are untouched.
   defp as_of_records(records, resource, as_of) do
     Ash.Filter.Runtime.as_of_matches(records, resource, as_of)
   end
@@ -1760,18 +1759,9 @@ defmodule Ash.DataLayer.Ets do
 
   defp apply_atomics(_changeset, _resource, record), do: {:ok, record}
 
-  # A created record of a temporal resource is valid from the instant the write
-  # takes effect, with no end: `[as_of, ∞)`.
-  #
-  # The instant is resolved here, on this layer's own clock, because that is what
-  # core hands over. `Ash.Changeset.as_of/2` documents that a `:now`/`nil` write is
-  # anchored at the data layer's clock, and `Ash.Actions.Helpers.put_write_as_of/3`
-  # deliberately declines to stamp one — a core `now()` resolved slightly earlier
-  # could sit before the record's own validity and make a reload miss the write that
-  # just happened.
-  #
-  # A period the caller wrote is left alone. Saying when a record was valid is not
-  # the same as saying when it was written, and only the second is ours to supply.
+  # A created record is valid from the write, with no end: `[as_of, ∞)`. The instant
+  # is resolved on this layer's clock, per `Ash.Changeset.as_of/2` — a core `now()`
+  # resolved earlier could precede the record's validity and make a reload miss it.
   defp establish_period(record, resource, changeset) do
     case Ash.Resource.Info.temporal_attribute(resource) do
       nil ->
@@ -1789,26 +1779,15 @@ defmodule Ash.DataLayer.Ets do
     end
   end
 
-  # Two versions of one record must not both hold an instant. An as-of read is a
-  # point in time and expects the one version valid then, so a pair that overlaps
-  # does not merely store an untruth — it makes the read answer with two records
-  # where the resource has one. Keying by the period is what made that reachable:
-  # before it, a colliding write simply replaced its predecessor.
-  #
-  # ⚠️ This is a look followed by a write on a layer with no transactions, so two
-  # creates racing can both find nothing and both land. Non-overlap here is a
-  # contract stated and checked, not a lock — which is the point of expressing
-  # these semantics on a layer that has no transaction to hide behind.
-  #
-  # `extra` carries versions not in the table yet: a bulk create must not overlap
-  # its own earlier records either.
-  defp check_non_overlapping(table, resource, record, extra \\ []) do
+  # Two versions of one record must not both hold an instant. Not a lock: the look
+  # and the write are separate, so concurrent creates can both land.
+  defp check_non_overlapping(table, resource, record, pending \\ []) do
     with period when not is_nil(period) <- Ash.Resource.Info.temporal_attribute(resource),
          %Ash.Range{} = period_value <- Map.get(record, period),
          {:ok, keys} <- stored_keys(table) do
       primary_key = Map.take(record, Ash.Resource.Info.primary_key(resource))
 
-      if Enum.any?(keys ++ extra, &overlapping?(&1, primary_key, period, period_value)) do
+      if Enum.any?(keys ++ pending, &overlapping?(&1, primary_key, period, period_value)) do
         {:error,
          Ash.Error.Changes.InvalidAttribute.exception(
            field: period,
@@ -1824,9 +1803,7 @@ defmodule Ash.DataLayer.Ets do
     end
   end
 
-  # A stored key holds the primary key and the period together, so a version is
-  # recognised as another version of the same record, and compared, without
-  # reading its data back.
+  # The stored key holds the primary key and the period, so no data need be read.
   defp overlapping?(key, primary_key, period, period_value) do
     Map.take(key, Map.keys(primary_key)) == primary_key and
       match?(%Ash.Range{}, Map.get(key, period)) and
@@ -1851,13 +1828,9 @@ defmodule Ash.DataLayer.Ets do
 
   defp put_established_period(record, _attribute, _other, _resource, _changeset), do: record
 
-  # `nil` and `:now` both mean "the instant of this write", resolved on this
-  # layer's clock. Only a period over a temporal type has a now — one over
-  # integers does not, so such a resource writes its own bound or gets none.
-  #
-  # The instant is cast through the period's own inner type, which is what
-  # settles precision: `:datetime` is second-resolution, so an untruncated
-  # `DateTime.utc_now/0` would be refused on the way to storage.
+  # `nil` and `:now` both mean the instant of this write. Only a period over a
+  # temporal type has a now, and casting through the inner type settles precision:
+  # `:datetime` is second-resolution, so an untruncated `utc_now/0` is refused.
   defp write_instant(resource, changeset) do
     inner_type = Ash.Resource.Info.temporal_inner_type(resource)
 
@@ -1965,10 +1938,8 @@ defmodule Ash.DataLayer.Ets do
     end
   end
 
-  # A record's primary key must be complete before anything is stored under it.
-  # The key itself is taken from the record rather than from the changeset,
-  # because on a temporal resource part of it — the period — is established here
-  # rather than supplied by the caller.
+  # The key itself is taken from the record, not the changeset: on a temporal
+  # resource the period is established by this layer.
   defp validate_pkey(resource, changeset) do
     pkey =
       resource
@@ -2190,9 +2161,7 @@ defmodule Ash.DataLayer.Ets do
          record <- retain_fields(record, changeset) do
       new_pkey = pkey_map(resource, record)
 
-      # A superseded version's key is retired by the supersession itself — closed
-      # under a new key, or dropped — so this path, which exists for a primary key
-      # the caller changed, must not also destroy it.
+      # A supersession has already retired the old key, so it must not be destroyed.
       if is_nil(supersede) && new_pkey != pkey do
         case destroy(resource, changeset) do
           :ok ->
@@ -2210,11 +2179,8 @@ defmodule Ash.DataLayer.Ets do
     end
   end
 
-  # Updating a temporal resource supersedes the version being updated rather than
-  # overwriting it, at the instant of the write. Anything else is written in place
-  # as before: a resource with no period, or one whose period is over a type that
-  # has no now, in which case the layer has no instant to supersede at and the
-  # resource is writing its own bounds.
+  # `nil` writes in place: a resource with no period, or one whose period is over a
+  # type with no now to supersede at.
   defp supersession(resource, changeset) do
     with period when not is_nil(period) <- Ash.Resource.Info.temporal_attribute(resource),
          {:ok, as_of} <- write_instant(resource, changeset) do
@@ -2248,11 +2214,8 @@ defmodule Ash.DataLayer.Ets do
     end
   end
 
-  # The key a record is stored under is what makes two writes the same record.
-  # Ordinarily that is the primary key. On a temporal resource it is the primary
-  # key together with the period: versions of one record share a primary key and
-  # differ only in when they were valid, so keying on the primary key alone would
-  # have each version overwrite the one before it.
+  # On a temporal resource the period joins the key: versions of one record share a
+  # primary key, so keying on it alone would have each version overwrite the last.
   @doc false
   def pkey_map(resource, data) do
     resource
@@ -2331,17 +2294,9 @@ defmodule Ash.DataLayer.Ets do
 
   defp write_version(table, pkey, _prior, data, _resource, nil), do: put_data(table, pkey, data)
 
-  # A temporal update splits the version it acts on at the instant of the write:
-  # that version keeps the values it held up to the instant, and a new one carries
-  # the updated values from there to wherever the old version ended. Total validity
-  # is preserved, so updating a version that had already been closed does not
-  # silently extend it to forever.
-  #
-  # ⚠️ This layer has no transactions, so a split is not one write. The old key goes
-  # first and both halves land together, which means a concurrent reader can see the
-  # record as absent for an instant — but never as two versions at once. A gap reads
-  # as an empty result, where an overlap would break the one-version-per-instant
-  # shape every as-of read depends on.
+  # A temporal update splits the version at `as_of`, the new half ending where the old
+  # one did so an edit cannot extend a closed version to forever. No transaction here,
+  # so the delete goes first: a reader can see the record absent, never twice.
   defp write_version(table, pkey, prior_data, data, resource, {period, as_of}) do
     prior = Map.get(pkey, period)
 
@@ -2355,11 +2310,8 @@ defmodule Ash.DataLayer.Ets do
     end
   end
 
-  # An instant the version does not hold cannot split it: the record being updated
-  # is not the one that was valid then, which is what this layer already means by
-  # stale. A version updated at the very instant it began keeps nothing — the half
-  # before the instant holds no instant at all — so `nil` says drop it, and the
-  # update reads as an ordinary overwrite.
+  # An instant the version does not hold cannot split it, which is staleness. `nil`
+  # drops a half holding no instant: an update at the instant the version began.
   defp close_at(%Ash.Range{} = prior, as_of, resource, period) do
     closed = %{prior | upper: as_of}
 
@@ -2387,8 +2339,7 @@ defmodule Ash.DataLayer.Ets do
     end
   end
 
-  # A version is its key and its stored data, and the period appears in both — cast
-  # in the key, dumped in the data, exactly as every other write leaves them.
+  # The period is cast in the key and dumped in the data, as every other write leaves it.
   defp version(resource, pkey, period, data, range) do
     attribute = Ash.Resource.Info.temporal_period(resource)
 

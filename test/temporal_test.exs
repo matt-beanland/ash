@@ -329,17 +329,9 @@ defmodule Ash.TemporalTest do
   describe "Ets establishes a period on create" do
     alias Ash.Test.Temporal.EtsVersioned
 
-    # Every test above seeds its periods, which goes straight to the data layer.
-    # A record created through an action cannot: a transformer refuses a resource
-    # whose period attribute is accepted as action input, so nothing above the data
-    # layer is able to set one. Without the layer establishing it, such a record
-    # carries no period, and `as_of_matches/3` drops exactly those — so an ordinary
-    # create was invisible to every as-of read, including a read with no as_of.
-    # The bound is cast through the period's inner type, and `:datetime` is
-    # second-resolution — so it is truncated, and can precede the wall clock at the
-    # moment of the write by up to a second. Compared at the period's own precision
-    # for that reason: a record is valid from the start of the second it was written
-    # in, not from the microsecond.
+    # Until the layer established one, a created record carried no period and
+    # `as_of_matches/3` dropped it from every read. The bound is cast through the
+    # inner type, so a `:datetime` record is valid from the start of its second.
     test "a created record is valid from the write, with no end" do
       before = DateTime.utc_now() |> DateTime.truncate(:second)
 
@@ -402,9 +394,8 @@ defmodule Ash.TemporalTest do
       |> Ash.create()
     end
 
-    # Both creates open a period with no end, so the later one holds every instant
-    # the earlier one does from its own start onwards. An as-of read there would
-    # answer with two records for a resource that has one.
+    # Both creates open a period with no end, so from the later one's start an as-of
+    # read would answer with two records for a resource that has one.
     test "a second open-ended version of one record is refused" do
       assert {:ok, _} = create_at(1, "first", ~U[2020-01-01 00:00:00Z])
 
@@ -447,9 +438,8 @@ defmodule Ash.TemporalTest do
                error
     end
 
-    # Nothing in the batch is stored until the batch is written, so a batch that
-    # clashes with itself has nothing to be compared against unless the records
-    # already accepted are carried along.
+    # Nothing in the batch is stored until the batch is written, so the records
+    # already accepted have to be carried along to be compared against.
     test "nor overlap its own earlier records" do
       assert %Ash.BulkResult{status: :error, errors: [error]} =
                Ash.bulk_create(
@@ -495,9 +485,8 @@ defmodule Ash.TemporalTest do
       assert ["second"] = names_at(~U[2023-01-01 00:00:00Z])
     end
 
-    # An update splits a version; it does not extend one. Were the new half opened
-    # with no end, updating a version that had already been closed would make the
-    # record valid forever on the strength of an edit.
+    # An update splits a version; it does not extend one. Were the new half opened with
+    # no end, editing a closed version would make the record valid forever.
     test "the new version ends where the one it split ended" do
       record = Ash.Seed.seed!(%EtsVersioned{id: 1, name: "first", valid_at: @early})
 
@@ -513,9 +502,8 @@ defmodule Ash.TemporalTest do
       assert [] = names_at(~U[2021-06-01 00:00:00Z])
     end
 
-    # Splitting at the instant a version began leaves a half that holds no instant.
-    # It is dropped rather than stored, and the update reads as an ordinary
-    # overwrite — the same thing it would have been before any of this.
+    # Splitting at the instant a version began leaves a half holding no instant. It is
+    # dropped, and the update reads as an ordinary overwrite.
     test "an update at the instant the version began overwrites it" do
       record = Ash.Seed.seed!(%EtsVersioned{id: 1, name: "first", valid_at: @open})
 
@@ -541,12 +529,8 @@ defmodule Ash.TemporalTest do
       assert ["second"] = EtsVersioned |> Ash.read!() |> Enum.map(& &1.name)
     end
 
-    # A version cannot be split at an instant it does not hold: the record being
-    # updated is not the one that was valid then, which is what this layer already
-    # means by stale. Through an action the refusal comes earlier and from core —
-    # the atomic upgrade re-reads the record at the write's `as_of` and finds
-    # nothing — so these are two tests, and the layer's own guard is the backstop
-    # for a caller that reaches it directly.
+    # Through an action core refuses first: the atomic upgrade re-reads at `as_of`
+    # and finds nothing. The layer's own guard is the backstop, hence two tests.
     test "an update at an instant the version does not hold is refused" do
       record = Ash.Seed.seed!(%EtsVersioned{id: 1, name: "first", valid_at: @early})
 
