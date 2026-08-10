@@ -1683,6 +1683,7 @@ defmodule Ash.DataLayer.Ets do
           with {:ok, pkey} <- get_valid_pkey(resource, changeset),
                {:ok, record} <- Ash.Changeset.apply_attributes(changeset),
                {:ok, record} <- apply_atomics(changeset, resource, record),
+               {:ok, record} <- establish_period(record, resource, changeset),
                record <- unload_relationships(resource, record) do
             {:cont,
              {:ok,

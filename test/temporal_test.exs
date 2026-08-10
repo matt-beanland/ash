@@ -5,8 +5,6 @@
 defmodule Ash.TemporalTest do
   use ExUnit.Case, async: true
 
-  require Ash.Expr
-
   @as_of ~U[2020-06-15 12:00:00.000000Z]
 
   describe "Ash.Query.as_of/2" do
@@ -344,6 +342,18 @@ defmodule Ash.TemporalTest do
 
       assert %Ash.Range{lower: ^as_of, upper: nil} = record.valid_at
       assert [%{name: "pinned"}] = EtsVersioned |> Ash.Query.as_of(as_of) |> Ash.read!()
+    end
+
+    # A bulk create takes its own path through the layer, so it establishes the
+    # period separately. It is the same rule: created is valid from the write.
+    test "a bulk-created record is established the same way" do
+      assert %Ash.BulkResult{records: [record]} =
+               Ash.bulk_create!([%{id: 13, name: "bulked"}], EtsVersioned, :create,
+                 return_records?: true
+               )
+
+      assert %Ash.Range{lower: %DateTime{}, upper: nil, bounds: :"[)"} = record.valid_at
+      assert [%{name: "bulked"}] = EtsVersioned |> Ash.read!()
     end
   end
 
