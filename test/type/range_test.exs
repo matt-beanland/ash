@@ -228,6 +228,73 @@ defmodule Ash.Type.RangeTest do
     end
   end
 
+  describe "overlaps?/2" do
+    test "two ranges sharing points overlap, in either order" do
+      left = %Range{lower: 1, upper: 5, bounds: :"[)"}
+      right = %Range{lower: 4, upper: 9, bounds: :"[)"}
+
+      assert Range.overlaps?(left, right)
+      assert Range.overlaps?(right, left)
+    end
+
+    test "a range contained in another overlaps it" do
+      assert Range.overlaps?(
+               %Range{lower: 1, upper: 9, bounds: :"[)"},
+               %Range{lower: 3, upper: 4, bounds: :"[)"}
+             )
+    end
+
+    test "adjacent ranges do not overlap, which is what lets them tile" do
+      refute Range.overlaps?(
+               %Range{lower: 1, upper: 3, bounds: :"[)"},
+               %Range{lower: 3, upper: 5, bounds: :"[)"}
+             )
+    end
+
+    test "a shared boundary is a shared point only when both sides include it" do
+      assert Range.overlaps?(
+               %Range{lower: 1, upper: 3, bounds: :"[]"},
+               %Range{lower: 3, upper: 5, bounds: :"[)"}
+             )
+
+      refute Range.overlaps?(
+               %Range{lower: 1, upper: 3, bounds: :"[]"},
+               %Range{lower: 3, upper: 5, bounds: :"()"}
+             )
+    end
+
+    test "an unbounded end overlaps everything beyond it" do
+      assert Range.overlaps?(
+               %Range{lower: 1, upper: nil, bounds: :"[)"},
+               %Range{lower: 1_000, upper: nil, bounds: :"[)"}
+             )
+
+      assert Range.overlaps?(
+               %Range{lower: nil, upper: nil, bounds: :"[)"},
+               %Range{lower: 3, upper: 4, bounds: :"[)"}
+             )
+    end
+
+    test "an empty range overlaps nothing, not even itself" do
+      empty = %Range{lower: 5, upper: 5, bounds: :"[)"}
+
+      refute Range.overlaps?(empty, empty)
+      refute Range.overlaps?(empty, %Range{lower: nil, upper: nil, bounds: :"[)"})
+    end
+
+    test "compares datetimes by Comp, not by term order" do
+      assert Range.overlaps?(
+               %Range{lower: ~U[2026-01-31 00:00:00Z], upper: nil, bounds: :"[)"},
+               %Range{lower: ~U[2026-02-01 00:00:00Z], upper: nil, bounds: :"[)"}
+             )
+
+      refute Range.overlaps?(
+               %Range{lower: ~U[2026-01-31 00:00:00Z], upper: ~U[2026-02-01 00:00:00Z]},
+               %Range{lower: ~U[2026-02-01 00:00:00Z], upper: ~U[2026-03-01 00:00:00Z]}
+             )
+    end
+  end
+
   describe "bounds names" do
     # Names are an alternative spelling, not a replacement: whichever is given,
     # the struct carries the notation, so nothing matching on `bounds` changes.

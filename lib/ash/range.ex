@@ -118,6 +118,31 @@ defmodule Ash.Range do
   end
 
   @doc """
+  Whether two ranges share any point.
+
+  An empty range overlaps nothing, not even itself. Each range must start at or
+  before the other ends, and a boundary the two ranges share counts only when both
+  sides include it — so `[1,3)` and `[3,5)` do not overlap, where `[1,3]` and
+  `[3,5)` do. Bounds are compared with `Comp`, as everywhere else here.
+  """
+  @spec overlaps?(t(), t()) :: boolean()
+  def overlaps?(%__MODULE__{} = left, %__MODULE__{} = right) do
+    not empty?(left) and not empty?(right) and
+      starts_before_end?(left, right) and starts_before_end?(right, left)
+  end
+
+  defp starts_before_end?(%{lower: nil}, _other), do: true
+  defp starts_before_end?(_range, %{upper: nil}), do: true
+
+  defp starts_before_end?(range, other) do
+    case Comp.compare(range.lower, other.upper) do
+      :lt -> true
+      :eq -> lower_inclusive?(range) and upper_inclusive?(other)
+      :gt -> false
+    end
+  end
+
+  @doc """
   Compares two ranges by lower bound then upper, as Postgres orders them.
 
   Empty sorts below everything, an unbounded lower is `-∞` and an unbounded upper
