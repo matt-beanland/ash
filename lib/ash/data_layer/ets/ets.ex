@@ -2113,6 +2113,8 @@ defmodule Ash.DataLayer.Ets do
   def update(resource, changeset, pkey \\ nil, from_bulk? \\ false) do
     pkey = pkey || pkey_map(resource, changeset.data)
 
+    supersede = supersession(resource, changeset)
+
     with {:ok, table} <- wrap_or_create_table(resource, changeset.tenant),
          _ <- if(!from_bulk?, do: log_update(resource, pkey, changeset)),
          {:ok, record} <-
@@ -2122,13 +2124,17 @@ defmodule Ash.DataLayer.Ets do
              changeset.domain,
              changeset.tenant,
              resource,
-             changeset.context[:private][:actor]
+             changeset.context[:private][:actor],
+             supersede
            ),
          {:ok, record} <- cast_record(record, resource),
          record <- retain_fields(record, changeset) do
       new_pkey = pkey_map(resource, record)
 
-      if new_pkey != pkey do
+      # A superseded version's key is retired by the supersession itself — closed
+      # under a new key, or dropped — so this path, which exists for a primary key
+      # the caller changed, must not also destroy it.
+      if is_nil(supersede) && new_pkey != pkey do
         case destroy(resource, changeset) do
           :ok ->
             {:ok, %{record | __meta__: %Ecto.Schema.Metadata{state: :loaded, schema: resource}}}
@@ -2142,6 +2148,20 @@ defmodule Ash.DataLayer.Ets do
     else
       {:error, error} ->
         {:error, error}
+    end
+  end
+
+  # Updating a temporal resource supersedes the version being updated rather than
+  # overwriting it, at the instant of the write. Anything else is written in place
+  # as before: a resource with no period, or one whose period is over a type that
+  # has no now, in which case the layer has no instant to supersede at and the
+  # resource is writing its own bounds.
+  defp supersession(resource, changeset) do
+    with period when not is_nil(period) <- Ash.Resource.Info.temporal_attribute(resource),
+         {:ok, as_of} <- write_instant(resource, changeset) do
+      {period, as_of}
+    else
+      _ -> nil
     end
   end
 
@@ -2198,7 +2218,8 @@ defmodule Ash.DataLayer.Ets do
          domain,
          tenant,
          resource,
-         actor
+         actor,
+         supersede
        ) do
     attributes = resource |> Ash.Resource.Info.attributes()
 
@@ -2213,12 +2234,12 @@ defmodule Ash.DataLayer.Ets do
                 empty when empty in [nil, []] ->
                   data = Map.merge(record, casted)
 
-                  put_data(table, pkey, data)
+                  write_version(table, pkey, record, data, resource, supersede)
 
                 atomics ->
                   with {:ok, atomics} <- make_atomics(atomics, resource, domain, casted_record) do
                     data = record |> Map.merge(casted) |> Map.merge(atomics)
-                    put_data(table, pkey, data)
+                    write_version(table, pkey, record, data, resource, supersede)
                   end
               end
             else
@@ -2246,6 +2267,76 @@ defmodule Ash.DataLayer.Ets do
 
       {:error, error} ->
         {:error, error}
+    end
+  end
+
+  defp write_version(table, pkey, _prior, data, _resource, nil), do: put_data(table, pkey, data)
+
+  # A temporal update splits the version it acts on at the instant of the write:
+  # that version keeps the values it held up to the instant, and a new one carries
+  # the updated values from there to wherever the old version ended. Total validity
+  # is preserved, so updating a version that had already been closed does not
+  # silently extend it to forever.
+  #
+  # ⚠️ This layer has no transactions, so a split is not one write. The old key goes
+  # first and both halves land together, which means a concurrent reader can see the
+  # record as absent for an instant — but never as two versions at once. A gap reads
+  # as an empty result, where an overlap would break the one-version-per-instant
+  # shape every as-of read depends on.
+  defp write_version(table, pkey, prior_data, data, resource, {period, as_of}) do
+    prior = Map.get(pkey, period)
+
+    with {:ok, closed} <- close_at(prior, as_of, resource, period),
+         {:ok, {_key, opened_data} = opened} <-
+           version(resource, pkey, period, data, %{prior | lower: as_of}),
+         {:ok, retained} <- retained(resource, pkey, period, prior_data, closed),
+         {:ok, table} <- ETS.Set.delete(table, pkey),
+         {:ok, _table} <- ETS.Set.put(table, retained ++ [opened]) do
+      {:ok, opened_data}
+    end
+  end
+
+  # An instant the version does not hold cannot split it: the record being updated
+  # is not the one that was valid then, which is what this layer already means by
+  # stale. A version updated at the very instant it began keeps nothing — the half
+  # before the instant holds no instant at all — so `nil` says drop it, and the
+  # update reads as an ordinary overwrite.
+  defp close_at(%Ash.Range{} = prior, as_of, resource, period) do
+    closed = %{prior | upper: as_of}
+
+    cond do
+      not Ash.Range.contains?(prior, as_of) ->
+        {:error, Ash.Error.Changes.StaleRecord.exception(resource: resource, field: period)}
+
+      Ash.Range.empty?(closed) ->
+        {:ok, nil}
+
+      true ->
+        {:ok, closed}
+    end
+  end
+
+  defp close_at(_prior, _as_of, resource, period) do
+    {:error, Ash.Error.Changes.StaleRecord.exception(resource: resource, field: period)}
+  end
+
+  defp retained(_resource, _pkey, _period, _prior_data, nil), do: {:ok, []}
+
+  defp retained(resource, pkey, period, prior_data, closed) do
+    with {:ok, version} <- version(resource, pkey, period, prior_data, closed) do
+      {:ok, [version]}
+    end
+  end
+
+  # A version is its key and its stored data, and the period appears in both — cast
+  # in the key, dumped in the data, exactly as every other write leaves them.
+  defp version(resource, pkey, period, data, range) do
+    attribute = Ash.Resource.Info.temporal_period(resource)
+
+    case Ash.Type.dump_to_native(attribute.type, range, attribute.constraints) do
+      {:ok, dumped} -> {:ok, {%{pkey | period => range}, Map.put(data, period, dumped)}}
+      :error -> {:error, "could not store the period #{inspect(range)}"}
+      {:error, error} -> {:error, error}
     end
   end
 

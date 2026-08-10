@@ -392,6 +392,114 @@ defmodule Ash.TemporalTest do
     end
   end
 
+  describe "Ets supersedes a version on update" do
+    alias Ash.Test.Temporal.EtsVersioned
+
+    defp update_at(record, name, as_of) do
+      record
+      |> Ash.Changeset.for_update(:update, %{name: name})
+      |> Ash.Changeset.as_of(as_of)
+      |> Ash.update!()
+    end
+
+    defp names_at(instant) do
+      EtsVersioned
+      |> Ash.Query.as_of(instant)
+      |> Ash.read!()
+      |> Enum.map(& &1.name)
+    end
+
+    test "the version being updated keeps the values it held, up to the write" do
+      record = Ash.Seed.seed!(%EtsVersioned{id: 1, name: "first", valid_at: @open})
+
+      updated = update_at(record, "second", ~U[2023-01-01 00:00:00Z])
+
+      assert %Ash.Range{lower: ~U[2023-01-01 00:00:00Z], upper: nil, bounds: :"[)"} =
+               updated.valid_at
+
+      assert ["first"] = names_at(~U[2022-01-01 00:00:00Z])
+      assert ["second"] = names_at(~U[2023-06-01 00:00:00Z])
+      # The instant of the write belongs to the version it opens, not the one it closes.
+      assert ["second"] = names_at(~U[2023-01-01 00:00:00Z])
+    end
+
+    # An update splits a version; it does not extend one. Were the new half opened
+    # with no end, updating a version that had already been closed would make the
+    # record valid forever on the strength of an edit.
+    test "the new version ends where the one it split ended" do
+      record = Ash.Seed.seed!(%EtsVersioned{id: 1, name: "first", valid_at: @early})
+
+      updated = update_at(record, "second", ~U[2020-06-01 00:00:00Z])
+
+      assert %Ash.Range{
+               lower: ~U[2020-06-01 00:00:00Z],
+               upper: ~U[2021-01-01 00:00:00Z]
+             } = updated.valid_at
+
+      assert ["first"] = names_at(~U[2020-03-01 00:00:00Z])
+      assert ["second"] = names_at(~U[2020-09-01 00:00:00Z])
+      assert [] = names_at(~U[2021-06-01 00:00:00Z])
+    end
+
+    # Splitting at the instant a version began leaves a half that holds no instant.
+    # It is dropped rather than stored, and the update reads as an ordinary
+    # overwrite — the same thing it would have been before any of this.
+    test "an update at the instant the version began overwrites it" do
+      record = Ash.Seed.seed!(%EtsVersioned{id: 1, name: "first", valid_at: @open})
+
+      updated = update_at(record, "second", @open.lower)
+
+      assert updated.valid_at == @open
+      assert ["second"] = names_at(~U[2021-06-01 00:00:00Z])
+    end
+
+    test "with no as_of the split happens on the layer's own clock" do
+      record = Ash.Seed.seed!(%EtsVersioned{id: 1, name: "first", valid_at: @open})
+      before = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      updated =
+        record
+        |> Ash.Changeset.for_update(:update, %{name: "second"})
+        |> Ash.update!()
+
+      assert %Ash.Range{lower: lower, upper: nil} = updated.valid_at
+      assert DateTime.compare(lower, before) in [:gt, :eq]
+
+      assert ["first"] = names_at(~U[2021-06-01 00:00:00Z])
+      assert ["second"] = EtsVersioned |> Ash.read!() |> Enum.map(& &1.name)
+    end
+
+    # A version cannot be split at an instant it does not hold: the record being
+    # updated is not the one that was valid then, which is what this layer already
+    # means by stale. Through an action the refusal comes earlier and from core —
+    # the atomic upgrade re-reads the record at the write's `as_of` and finds
+    # nothing — so these are two tests, and the layer's own guard is the backstop
+    # for a caller that reaches it directly.
+    test "an update at an instant the version does not hold is refused" do
+      record = Ash.Seed.seed!(%EtsVersioned{id: 1, name: "first", valid_at: @early})
+
+      assert_raise Ash.Error.Invalid, ~r/stale record/, fn ->
+        update_at(record, "second", ~U[2026-01-01 00:00:00Z])
+      end
+
+      assert ["first"] = names_at(~U[2020-06-01 00:00:00Z])
+    end
+
+    test "and the layer refuses it on its own account, naming the period" do
+      record = Ash.Seed.seed!(%EtsVersioned{id: 1, name: "first", valid_at: @early})
+
+      changeset =
+        record
+        |> Ash.Changeset.for_update(:update, %{name: "second"})
+        |> Ash.Changeset.as_of(~U[2026-01-01 00:00:00Z])
+
+      assert {:error, %Ash.Error.Changes.StaleRecord{field: :valid_at}} =
+               Ash.DataLayer.update(EtsVersioned, changeset)
+
+      assert ["first"] = names_at(~U[2020-06-01 00:00:00Z])
+    end
+  end
+
   describe "the period attribute" do
     alias Ash.Test.Temporal.EtsVersioned
 

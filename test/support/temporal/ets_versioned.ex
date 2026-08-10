@@ -29,6 +29,10 @@ defmodule Ash.Test.Temporal.EtsVersioned do
     create :create do
       accept [:id, :name]
     end
+
+    update :update do
+      accept [:name]
+    end
   end
 
   attributes do
