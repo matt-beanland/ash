@@ -573,6 +573,77 @@ defmodule Ash.TemporalTest do
     end
   end
 
+  # Every scenario above updates a version that holds the instant of the write. When
+  # none does, an update has nothing to split, and a create is the only way back in.
+  # Pinned here because both were previously accidental, and Postgres answers each of
+  # these identically.
+  describe "when no version holds the instant of the write" do
+    alias Ash.Test.Temporal.EtsVersioned
+
+    @past %Ash.Range{
+      lower: ~U[2020-01-01 00:00:00Z],
+      upper: ~U[2021-01-01 00:00:00Z],
+      bounds: :"[)"
+    }
+    @future %Ash.Range{lower: ~U[2027-01-01 00:00:00Z], upper: nil, bounds: :"[)"}
+    @now ~U[2026-06-01 00:00:00Z]
+
+    defp update_now(record) do
+      record
+      |> Ash.Changeset.for_update(:update, %{name: "new"})
+      |> Ash.Changeset.as_of(@now)
+      |> Ash.update()
+    end
+
+    defp create_now do
+      EtsVersioned
+      |> Ash.Changeset.for_create(:create, %{id: 1, name: "new"})
+      |> Ash.Changeset.as_of(@now)
+      |> Ash.create()
+    end
+
+    test "a version that has already ended cannot be updated" do
+      record = Ash.Seed.seed!(%EtsVersioned{id: 1, name: "old", valid_at: @past})
+
+      assert {:error, _} = update_now(record)
+    end
+
+    test "nor can one that has not begun" do
+      record = Ash.Seed.seed!(%EtsVersioned{id: 1, name: "soon", valid_at: @future})
+
+      assert {:error, _} = update_now(record)
+    end
+
+    test "nor can an instant in the gap between two versions" do
+      record = Ash.Seed.seed!(%EtsVersioned{id: 1, name: "old", valid_at: @past})
+      Ash.Seed.seed!(%EtsVersioned{id: 1, name: "soon", valid_at: @future})
+
+      assert {:error, _} = update_now(record)
+    end
+
+    # So a record whose history has run out is revived by creating, not updating.
+    test "a record whose versions have all ended can be created again" do
+      Ash.Seed.seed!(%EtsVersioned{id: 1, name: "old", valid_at: @past})
+
+      assert {:ok, %{valid_at: %Ash.Range{lower: @now, upper: nil}}} = create_now()
+
+      assert [%{name: "old"}] =
+               EtsVersioned |> Ash.Query.as_of(~U[2020-06-01 00:00:00Z]) |> Ash.read!()
+
+      assert [%{name: "new"}] = EtsVersioned |> Ash.Query.as_of(@now) |> Ash.read!()
+    end
+
+    # But not when a later version is already scheduled: a create opens `[as_of, ∞)`,
+    # which overlaps it. An update inherits the version's end and so respects its
+    # neighbour; a create does not, and there is no way to say "from now until the
+    # version that already exists". Postgres refuses this too.
+    test "but not while a later version is already scheduled" do
+      Ash.Seed.seed!(%EtsVersioned{id: 1, name: "soon", valid_at: @future})
+
+      assert {:error, _} = create_now()
+    end
+  end
+
   describe "the period attribute" do
     alias Ash.Test.Temporal.EtsVersioned
 
