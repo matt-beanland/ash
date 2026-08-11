@@ -223,67 +223,67 @@ defmodule Ash.Type.RangeTest do
     end
   end
 
-  describe "overlaps?/2" do
-    test "two ranges sharing points overlap, in either order" do
+  describe "intersects?/2" do
+    test "two ranges sharing points intersect, in either order" do
       left = %Range{lower: 1, upper: 5, bounds: :"[)"}
       right = %Range{lower: 4, upper: 9, bounds: :"[)"}
 
-      assert Range.overlaps?(left, right)
-      assert Range.overlaps?(right, left)
+      assert Range.intersects?(left, right)
+      assert Range.intersects?(right, left)
     end
 
-    test "a range contained in another overlaps it" do
-      assert Range.overlaps?(
+    test "a range contained in another intersects it" do
+      assert Range.intersects?(
                %Range{lower: 1, upper: 9, bounds: :"[)"},
                %Range{lower: 3, upper: 4, bounds: :"[)"}
              )
     end
 
-    test "adjacent ranges do not overlap, which is what lets them tile" do
-      refute Range.overlaps?(
+    test "adjacent ranges do not intersect, which is what lets them tile" do
+      refute Range.intersects?(
                %Range{lower: 1, upper: 3, bounds: :"[)"},
                %Range{lower: 3, upper: 5, bounds: :"[)"}
              )
     end
 
     test "a shared boundary is a shared point only when both sides include it" do
-      assert Range.overlaps?(
+      assert Range.intersects?(
                %Range{lower: 1, upper: 3, bounds: :"[]"},
                %Range{lower: 3, upper: 5, bounds: :"[)"}
              )
 
-      refute Range.overlaps?(
+      refute Range.intersects?(
                %Range{lower: 1, upper: 3, bounds: :"[]"},
                %Range{lower: 3, upper: 5, bounds: :"()"}
              )
     end
 
-    test "an unbounded end overlaps everything beyond it" do
-      assert Range.overlaps?(
+    test "an unbounded end intersects everything beyond it" do
+      assert Range.intersects?(
                %Range{lower: 1, upper: nil, bounds: :"[)"},
                %Range{lower: 1_000, upper: nil, bounds: :"[)"}
              )
 
-      assert Range.overlaps?(
+      assert Range.intersects?(
                %Range{lower: nil, upper: nil, bounds: :"[)"},
                %Range{lower: 3, upper: 4, bounds: :"[)"}
              )
     end
 
-    test "an empty range overlaps nothing, not even itself" do
+    test "an empty range intersects nothing, not even itself" do
       empty = %Range{lower: 5, upper: 5, bounds: :"[)"}
 
-      refute Range.overlaps?(empty, empty)
-      refute Range.overlaps?(empty, %Range{lower: nil, upper: nil, bounds: :"[)"})
+      refute Range.intersects?(empty, empty)
+      refute Range.intersects?(empty, %Range{lower: nil, upper: nil, bounds: :"[)"})
     end
 
     test "compares datetimes by Comp, not by term order" do
-      assert Range.overlaps?(
+      assert Range.intersects?(
                %Range{lower: ~U[2026-01-31 00:00:00Z], upper: nil, bounds: :"[)"},
                %Range{lower: ~U[2026-02-01 00:00:00Z], upper: nil, bounds: :"[)"}
              )
 
-      refute Range.overlaps?(
+      refute Range.intersects?(
                %Range{lower: ~U[2026-01-31 00:00:00Z], upper: ~U[2026-02-01 00:00:00Z]},
                %Range{lower: ~U[2026-02-01 00:00:00Z], upper: ~U[2026-03-01 00:00:00Z]}
              )

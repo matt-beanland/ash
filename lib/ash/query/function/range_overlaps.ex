@@ -22,9 +22,10 @@ defmodule Ash.Query.Function.RangeOverlaps do
   def evaluate(%{arguments: [nil, _]}), do: {:known, nil}
   def evaluate(%{arguments: [_, nil]}), do: {:known, nil}
 
-  # Overlap is a fact about two ranges, so `Ash.Range` answers it. Postgres `&&`.
+  # Overlap is a fact about two ranges, so `Ash.Range` answers it. Postgres `&&` is
+  # intersection, which is what `intersects?/2` is named for.
   def evaluate(%{arguments: [%Range{} = left, %Range{} = right]}) do
-    {:known, Range.overlaps?(left, right)}
+    {:known, Range.intersects?(left, right)}
   end
 
   def evaluate(_other), do: :unknown

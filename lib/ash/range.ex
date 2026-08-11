@@ -120,13 +120,18 @@ defmodule Ash.Range do
   @doc """
   Whether two ranges share any point.
 
-  An empty range overlaps nothing, not even itself. Each range must start at or
+  An empty range intersects nothing, not even itself. Each range must start at or
   before the other ends, and a boundary the two ranges share counts only when both
-  sides include it — so `[1,3)` and `[3,5)` do not overlap, where `[1,3]` and
+  sides include it — so `[1,3)` and `[3,5)` do not intersect, where `[1,3]` and
   `[3,5)` do. Bounds are compared with `Comp`, as everywhere else here.
+
+  Named for what it answers rather than for the operator it backs. Postgres calls
+  `&&` "overlap" and `range_overlaps/2` keeps that name, but Allen's *overlaps* is
+  the narrower relation where two ranges cross with neither containing the other —
+  under which `[1,10)` and `[3,5)` do **not** overlap. This returns true for them.
   """
-  @spec overlaps?(t(), t()) :: boolean()
-  def overlaps?(%__MODULE__{} = left, %__MODULE__{} = right) do
+  @spec intersects?(t(), t()) :: boolean()
+  def intersects?(%__MODULE__{} = left, %__MODULE__{} = right) do
     not empty?(left) and not empty?(right) and
       starts_before_end?(left, right) and starts_before_end?(right, left)
   end

@@ -1827,7 +1827,7 @@ defmodule Ash.DataLayer.Ets do
   defp overlapping?(key, primary_key, period, period_value) do
     Map.take(key, Map.keys(primary_key)) == primary_key and
       match?(%Ash.Range{}, Map.get(key, period)) and
-      Ash.Range.overlaps?(Map.get(key, period), period_value)
+      Ash.Range.intersects?(Map.get(key, period), period_value)
   end
 
   defp stored_keys(table) do
