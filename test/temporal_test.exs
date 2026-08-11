@@ -642,6 +642,38 @@ defmodule Ash.TemporalTest do
 
       assert {:error, _} = create_now()
     end
+
+    # A create always opens `[as_of, ∞)`, so two of them can never coexist for one
+    # record whatever the order. Only an update produces a bounded period, by
+    # inheriting the end of the version it splits — so a change scheduled ahead of now
+    # has to be expressed as an update, and one already created has to be unwound.
+    # Postgres answers this sequence identically.
+    test "so a scheduled version is unwound and re-applied as an update" do
+      {:ok, scheduled} =
+        EtsVersioned
+        |> Ash.Changeset.for_create(:create, %{id: 1, name: "scheduled"})
+        |> Ash.Changeset.as_of(@future.lower)
+        |> Ash.create()
+
+      assert :ok = Ash.destroy(scheduled)
+      assert {:ok, current} = create_now()
+
+      assert {:ok, %{valid_at: %Ash.Range{lower: lower, upper: nil}}} =
+               current
+               |> Ash.Changeset.for_update(:update, %{name: "scheduled"})
+               |> Ash.Changeset.as_of(@future.lower)
+               |> Ash.update()
+
+      assert lower == @future.lower
+
+      assert [%{name: "new", valid_at: %Ash.Range{upper: upper}}] =
+               EtsVersioned |> Ash.Query.as_of(@now) |> Ash.read!()
+
+      assert upper == @future.lower
+
+      assert [%{name: "scheduled"}] =
+               EtsVersioned |> Ash.Query.as_of(~U[2027-06-01 00:00:00Z]) |> Ash.read!()
+    end
   end
 
   describe "the period attribute" do
