@@ -1684,6 +1684,7 @@ defmodule Ash.DataLayer.Ets do
                {:ok, record} <- apply_atomics(changeset, resource, record),
                {:ok, record} <- establish_period(record, resource, changeset),
                record <- unload_relationships(resource, record),
+               :ok <- check_non_empty(resource, record),
                :ok <-
                  check_non_overlapping(
                    table,
@@ -1737,6 +1738,7 @@ defmodule Ash.DataLayer.Ets do
          {:ok, record} <- apply_atomics(changeset, resource, record),
          {:ok, record} <- establish_period(record, resource, changeset),
          record <- unload_relationships(resource, record),
+         :ok <- check_non_empty(resource, record),
          :ok <- check_non_overlapping(table, resource, record),
          {:ok, record} <-
            put_or_insert_new(table, {pkey_map(resource, record), record}, resource) do
@@ -1776,6 +1778,24 @@ defmodule Ash.DataLayer.Ets do
            resource,
            changeset
          )}
+    end
+  end
+
+  # A period holding no instant cannot be read at any instant, so storing one stores a
+  # record that does not exist. Postgres refuses the same value on a `WITHOUT OVERLAPS`
+  # key, and an update drops such a half rather than writing it.
+  defp check_non_empty(resource, record) do
+    with period when not is_nil(period) <- Ash.Resource.Info.temporal_attribute(resource),
+         %Ash.Range{} = value <- Map.get(record, period),
+         true <- Ash.Range.empty?(value) do
+      {:error,
+       Ash.Error.Changes.InvalidAttribute.exception(
+         field: period,
+         value: value,
+         message: "is empty, so the record could not be read at any point in time"
+       )}
+    else
+      _ -> :ok
     end
   end
 

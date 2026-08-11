@@ -421,6 +421,23 @@ defmodule Ash.TemporalTest do
                EtsVersioned |> Ash.Query.as_of(~U[2021-06-01 00:00:00Z]) |> Ash.read!()
     end
 
+    # A period holding no instant is readable at none, so the record would exist in
+    # storage and nowhere else. Postgres refuses the same value outright: PG 19 gives
+    # `empty WITHOUT OVERLAPS value found in column` on the temporal key.
+    test "a period holding no instant is refused" do
+      empty = %Ash.Range{
+        lower: ~U[2020-01-01 00:00:00Z],
+        upper: ~U[2020-01-01 00:00:00Z],
+        bounds: :"[)"
+      }
+
+      assert_raise Ash.Error.Invalid, ~r/could not be read at any point in time/, fn ->
+        Ash.Seed.seed!(%EtsVersioned{id: 1, name: "empty", valid_at: empty})
+      end
+
+      assert [] = EtsVersioned |> Ash.Query.as_of(~U[2020-01-01 00:00:00Z]) |> Ash.read!()
+    end
+
     test "another record's overlapping period is no concern of this one's" do
       assert {:ok, _} = create_at(1, "one", ~U[2020-01-01 00:00:00Z])
       assert {:ok, _} = create_at(2, "two", ~U[2020-01-01 00:00:00Z])
