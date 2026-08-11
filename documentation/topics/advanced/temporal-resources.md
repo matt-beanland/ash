@@ -113,10 +113,16 @@ A temporal write establishes validity *from `as_of` onward* — the new row is
   with neither, a single `now` is pinned for the write so the period, any
   `&DateTime.utc_now/0` defaults (e.g. `create_timestamp`), and the stamped
   `as_of` all share the exact same instant.
-- **Updates and destroys split the period.** Updating "as of" an instant
-  truncates the currently-valid row at that instant and writes a new row with
-  the new values for `[as_of, ∞)`, using `FOR PORTION OF`. The prior version is
-  preserved as history.
+- **An update splits the period.** Updating "as of" an instant truncates the
+  currently-valid record at that instant and writes a new one carrying the new
+  values from there **to wherever the old version ended** — `[as_of, ∞)` only
+  when the version it split was itself open-ended. The prior version is
+  preserved as history. Splitting at the instant a version began leaves nothing
+  before the instant, so that update reads as an ordinary overwrite.
+- **A destroy ends validity; it does not delete history.** Destroying "as of" an
+  instant truncates the currently-valid record to `[lower, as_of)`. The record
+  is gone from that instant onward and unchanged before it. Destroying at the
+  instant the version began removes it entirely, since nothing of it survives.
 
 ```elixir
 # create the current version, valid from now on
@@ -137,6 +143,58 @@ sub
 > **action option** (`for_create(:create, input, as_of: ...)`), not via
 > `Ash.Changeset.as_of/2` after building the changeset. Those run while the
 > changeset is being constructed, so the instant must be set before then.
+
+### When no version is valid at that instant
+
+An update or destroy acts on *the version valid at `as_of`*. When no version is,
+there is nothing to split, and the write is refused as a stale record. That
+covers three cases which all look different but are the same rule:
+
+| The record's versions | An update "as of" now |
+| --- | --- |
+| the last one already ended | refused |
+| the only one has not begun yet | refused |
+| `as_of` falls in a gap between two | refused |
+
+So a record whose history has run out is brought back by **creating** it again,
+not by updating it — the create opens a fresh `[now, ∞)` alongside the closed
+history, which stays readable at its own instants.
+
+```elixir
+# the subscription lapsed last year; this revives it
+MyApp.Subscription
+|> Ash.Changeset.for_create(:create, %{id: 1, plan: "bronze"})
+|> Ash.create!()
+```
+
+### Scheduling a change ahead of now
+
+A create always opens `[as_of, ∞)`. Two of them therefore always overlap, so you
+cannot create a record "now" while a version dated later already exists — and
+there is no ordering that avoids it. **Only an update produces a bounded
+period**, by inheriting the end of the version it splits.
+
+So a future-dated change is expressed as an **update**, not a create:
+
+```elixir
+# valid from now, with no end
+{:ok, sub} =
+  MyApp.Subscription
+  |> Ash.Changeset.for_create(:create, %{id: 1, plan: "bronze"})
+  |> Ash.create!()
+
+# schedule the change: splits into [now, 2027-01-01) and [2027-01-01, ∞)
+sub
+|> Ash.Changeset.for_update(:change_plan, %{plan: "gold"}, as_of: ~U[2027-01-01 00:00:00Z])
+|> Ash.update!()
+```
+
+> ### A future version already created has to be unwound {: .warning}
+>
+> If the later version was *created* rather than scheduled as an update, it holds
+> `[its instant, ∞)` and nothing can be written before it. Recovering means
+> destroying that version, creating the present one, and re-applying the future
+> change as an update.
 
 ## Relationships
 
@@ -223,8 +281,13 @@ you loaded.)
 
 ## Limitations
 
-- **PostgreSQL 19+ via `ash_postgres` only.** Other data layers report
-  `Ash.DataLayer.can?(:temporal)` as `false`.
+- **PostgreSQL 19+ via `ash_postgres`, or `Ash.DataLayer.Ets`.** Other data
+  layers report `Ash.DataLayer.can?(:temporal)` as `false`. The two behave the
+  same on every observable point above, by different mechanisms: Postgres keys
+  the table `PRIMARY KEY (id, valid_at WITHOUT OVERLAPS)` and splits with
+  `FOR PORTION OF`, where ETS puts the period in its storage key and rewrites the
+  affected versions. ETS has no transactions, so a split is not atomic — a
+  concurrent reader can briefly see the record as absent, never as two versions.
 - **No "all history" reads.** Every read is a single point in time. Querying
   across multiple periods of the same record at once is not supported.
 - **Manual actions bypass temporal handling** — the data layer is never
