@@ -1837,6 +1837,8 @@ defmodule Ash.DataLayer.Ets do
     end
   end
 
+  # A period the caller wrote is left alone. When a record was valid is not the same
+  # as when it was written, and only the second is this layer's to supply.
   defp put_established_period(record, _attribute, %Ash.Range{}, _resource, _changeset), do: record
 
   defp put_established_period(record, attribute, nil, resource, changeset) do
