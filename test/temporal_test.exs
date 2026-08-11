@@ -311,18 +311,50 @@ defmodule Ash.TemporalTest do
                EtsVersioned |> Ash.Query.as_of(~U[2026-06-01 00:00:00Z]) |> Ash.read!()
     end
 
-    # A version is addressable, which is what makes it a record rather than a
-    # projection of one: destroying it takes that period and nothing else.
-    test "destroying one version leaves the others" do
+    # A destroy ends the record's validity at the instant of the write; it does not
+    # erase what the record was before then. Deleting the version outright would throw
+    # away the history a temporal resource exists to keep.
+    test "destroying a version ends its validity without erasing its history" do
       early = Ash.Seed.seed!(%EtsVersioned{id: 1, name: "early", valid_at: @early})
       Ash.Seed.seed!(%EtsVersioned{id: 1, name: "open", valid_at: @open})
 
-      Ash.destroy!(early)
+      assert :ok =
+               early
+               |> Ash.Changeset.for_destroy(:destroy, %{}, as_of: ~U[2020-06-01 00:00:00Z])
+               |> Ash.destroy()
 
-      assert [] = EtsVersioned |> Ash.Query.as_of(~U[2020-06-01 00:00:00Z]) |> Ash.read!()
+      assert [%{name: "early", valid_at: %Ash.Range{upper: ~U[2020-06-01 00:00:00Z]}}] =
+               EtsVersioned |> Ash.Query.as_of(~U[2020-03-01 00:00:00Z]) |> Ash.read!()
+
+      assert [] = EtsVersioned |> Ash.Query.as_of(~U[2020-09-01 00:00:00Z]) |> Ash.read!()
 
       assert [%{name: "open"}] =
                EtsVersioned |> Ash.Query.as_of(~U[2026-06-01 00:00:00Z]) |> Ash.read!()
+    end
+
+    # Nothing of the version survives the instant it began, so it goes entirely.
+    test "destroying at the instant a version began removes it" do
+      early = Ash.Seed.seed!(%EtsVersioned{id: 1, name: "early", valid_at: @early})
+
+      assert :ok =
+               early
+               |> Ash.Changeset.for_destroy(:destroy, %{}, as_of: @early.lower)
+               |> Ash.destroy()
+
+      assert [] = EtsVersioned |> Ash.Query.as_of(~U[2020-06-01 00:00:00Z]) |> Ash.read!()
+    end
+
+    # Same rule as an update: a version that is not valid then cannot be ended then.
+    test "destroying a version at an instant it does not hold is refused" do
+      early = Ash.Seed.seed!(%EtsVersioned{id: 1, name: "early", valid_at: @early})
+
+      assert {:error, _} =
+               early
+               |> Ash.Changeset.for_destroy(:destroy, %{}, as_of: ~U[2026-01-01 00:00:00Z])
+               |> Ash.destroy()
+
+      assert [%{name: "early"}] =
+               EtsVersioned |> Ash.Query.as_of(~U[2020-06-01 00:00:00Z]) |> Ash.read!()
     end
   end
 

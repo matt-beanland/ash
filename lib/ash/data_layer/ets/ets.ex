@@ -1874,16 +1874,24 @@ defmodule Ash.DataLayer.Ets do
 
   defp raw_instant(_changeset, _inner_type), do: :error
 
-  defp now_for(inner_type) when inner_type in [:datetime, Ash.Type.UtcDatetime],
-    do: {:ok, DateTime.utc_now()}
+  # Resolved through `get_type/1` because a period's inner type is a module by the time
+  # it is read back, and matching the short names alone silently answers `:error` — a
+  # write with no `as_of` then resolves no instant at all.
+  defp now_for(inner_type) do
+    case Ash.Type.get_type(inner_type) do
+      type when type in [Ash.Type.DateTime, Ash.Type.UtcDatetime, Ash.Type.UtcDatetimeUsec] ->
+        {:ok, DateTime.utc_now()}
 
-  defp now_for(inner_type) when inner_type in [:naive_datetime, Ash.Type.NaiveDatetime],
-    do: {:ok, NaiveDateTime.utc_now()}
+      Ash.Type.NaiveDatetime ->
+        {:ok, NaiveDateTime.utc_now()}
 
-  defp now_for(inner_type) when inner_type in [:date, Ash.Type.Date],
-    do: {:ok, Date.utc_today()}
+      Ash.Type.Date ->
+        {:ok, Date.utc_today()}
 
-  defp now_for(_inner_type), do: :error
+      _ ->
+        :error
+    end
+  end
 
   defp set_loaded(%resource{} = record) do
     %{record | __meta__: %Ecto.Schema.Metadata{state: :loaded, schema: resource}}
@@ -2060,11 +2068,12 @@ defmodule Ash.DataLayer.Ets do
       changeset.tenant,
       filter,
       changeset.domain,
-      changeset.context[:private][:actor]
+      changeset.context[:private][:actor],
+      supersession(resource, changeset)
     )
   end
 
-  defp do_destroy(resource, record, tenant, filter, domain, actor) do
+  defp do_destroy(resource, record, tenant, filter, domain, actor, supersede) do
     with {:ok, table} <- wrap_or_create_table(resource, tenant) do
       pkey = pkey_map(resource, record)
 
@@ -2073,9 +2082,7 @@ defmodule Ash.DataLayer.Ets do
           {:ok, {_key, record}} when is_map(record) ->
             with {:ok, record} <- cast_record(record, resource),
                  {:ok, [_]} <- filter_matches([record], filter, domain, tenant, actor) do
-              with {:ok, _} <- ETS.Set.delete(table, pkey) do
-                :ok
-              end
+              retire(table, pkey, resource, supersede)
             else
               {:ok, []} ->
                 {:error,
@@ -2092,9 +2099,36 @@ defmodule Ash.DataLayer.Ets do
             {:error, error}
         end
       else
-        with {:ok, _} <- ETS.Set.delete(table, pkey) do
+        retire(table, pkey, resource, supersede)
+      end
+    end
+  end
+
+  defp retire(table, pkey, resource, supersede) do
+    case {supersede, ETS.Set.get(table, pkey)} do
+      {{period, as_of}, {:ok, {_key, stored}}} when is_map(stored) ->
+        close_version(table, pkey, stored, resource, period, as_of)
+
+      _ ->
+        with {:ok, _} <- ETS.Set.delete(table, pkey), do: :ok
+    end
+  end
+
+  # A temporal destroy ends the record's validity at the instant of the write rather
+  # than erasing it: the version keeps the values it held up to that instant. Closing
+  # one at the instant it began leaves nothing to keep, so that version goes.
+  defp close_version(table, pkey, stored, resource, period, as_of) do
+    with {:ok, closed} <- close_at(Map.get(pkey, period), as_of, resource, period),
+         {:ok, table} <- ETS.Set.delete(table, pkey) do
+      case closed do
+        nil ->
           :ok
-        end
+
+        closed ->
+          with {:ok, version} <- version(resource, pkey, period, stored, closed),
+               {:ok, _} <- ETS.Set.put(table, [version]) do
+            :ok
+          end
       end
     end
   end
