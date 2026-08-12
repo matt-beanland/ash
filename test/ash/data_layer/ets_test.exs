@@ -14,6 +14,12 @@ defmodule Ash.DataLayer.EtsTest do
   setup do
     on_exit(fn ->
       Ash.DataLayer.Ets.stop(__MODULE__.EtsTestUser)
+      Ash.DataLayer.Ets.stop(__MODULE__.EtsStopCustomTableUser)
+      Ash.DataLayer.Ets.stop(__MODULE__.EtsStopPrivateCustomTableUser)
+
+      for tenant <- ["acme", "widgets"] do
+        Ash.DataLayer.Ets.stop(__MODULE__.EtsStopTenantedUser, tenant)
+      end
     end)
   end
 
@@ -59,6 +65,63 @@ defmodule Ash.DataLayer.EtsTest do
 
     attributes do
       integer_primary_key :id, writable?: true
+      attribute :name, :string, public?: true
+    end
+  end
+
+  defmodule EtsStopCustomTableUser do
+    use Ash.Resource, domain: Domain, data_layer: Ash.DataLayer.Ets
+
+    ets do
+      private? false
+      table :ets_stop_custom_table
+    end
+
+    actions do
+      defaults [:read, create: :*]
+    end
+
+    attributes do
+      uuid_primary_key :id
+      attribute :name, :string, public?: true
+    end
+  end
+
+  defmodule EtsStopPrivateCustomTableUser do
+    use Ash.Resource, domain: Domain, data_layer: Ash.DataLayer.Ets
+
+    ets do
+      private? true
+      table :ets_stop_private_custom_table
+    end
+
+    actions do
+      defaults [:read, create: :*]
+    end
+
+    attributes do
+      uuid_primary_key :id
+      attribute :name, :string, public?: true
+    end
+  end
+
+  defmodule EtsStopTenantedUser do
+    use Ash.Resource, domain: Domain, data_layer: Ash.DataLayer.Ets
+
+    ets do
+      private? false
+    end
+
+    multitenancy do
+      strategy :context
+    end
+
+    actions do
+      defaults [:read, create: :*]
+    end
+
+    attributes do
+      uuid_primary_key :id
       attribute :name, :string, public?: true
     end
   end
@@ -474,6 +537,81 @@ defmodule Ash.DataLayer.EtsTest do
         Ash.bulk_create!([%{name: "Foo"}, %{name: "Bar"}], EtsIntegerPrimaryKeyTestUser, :create)
       end)
     end
+  end
+
+  describe "stop/2" do
+    test "deletes the data of a resource storing under a declared table name" do
+      EtsStopCustomTableUser
+      |> Ash.Changeset.for_create(:create, %{name: "Mike"})
+      |> Ash.create!()
+
+      assert [_] = Ash.read!(EtsStopCustomTableUser)
+
+      ref = monitor_table_owner(EtsStopCustomTableUser, nil)
+      Ash.DataLayer.Ets.stop(EtsStopCustomTableUser)
+      assert_receive {:DOWN, ^ref, :process, _, _}
+
+      assert [] = Ash.read!(EtsStopCustomTableUser)
+    end
+
+    test "deletes the data of a contextually multitenant resource" do
+      EtsStopTenantedUser
+      |> Ash.Changeset.for_create(:create, %{name: "Mike"}, tenant: "acme")
+      |> Ash.create!()
+
+      assert [_] = Ash.read!(EtsStopTenantedUser, tenant: "acme")
+
+      ref = monitor_table_owner(EtsStopTenantedUser, "acme")
+      Ash.DataLayer.Ets.stop(EtsStopTenantedUser, "acme")
+      assert_receive {:DOWN, ^ref, :process, _, _}
+
+      assert [] = Ash.read!(EtsStopTenantedUser, tenant: "acme")
+    end
+
+    test "deletes the private data of a resource storing under a declared table name" do
+      EtsStopPrivateCustomTableUser
+      |> Ash.Changeset.for_create(:create, %{name: "Mike"})
+      |> Ash.create!()
+
+      assert [_] = Ash.read!(EtsStopPrivateCustomTableUser)
+
+      Ash.DataLayer.Ets.stop(EtsStopPrivateCustomTableUser)
+
+      assert [] = Ash.read!(EtsStopPrivateCustomTableUser)
+    end
+
+    test "leaves private storage readable, rather than holding a deleted table" do
+      create_user(%{name: "Mike"})
+
+      Ash.DataLayer.Ets.stop(EtsTestUser)
+
+      assert [] = Ash.read!(EtsTestUser)
+    end
+
+    test "leaves the storage of another tenant alone" do
+      for tenant <- ["acme", "widgets"] do
+        EtsStopTenantedUser
+        |> Ash.Changeset.for_create(:create, %{name: "Mike"}, tenant: tenant)
+        |> Ash.create!()
+      end
+
+      ref = monitor_table_owner(EtsStopTenantedUser, "acme")
+      Ash.DataLayer.Ets.stop(EtsStopTenantedUser, "acme")
+      assert_receive {:DOWN, ^ref, :process, _, _}
+
+      assert [] = Ash.read!(EtsStopTenantedUser, tenant: "acme")
+      assert [_] = Ash.read!(EtsStopTenantedUser, tenant: "widgets")
+    end
+  end
+
+  # The owner of the table is the process stop/2 has to reach, and it exits
+  # asynchronously, so the tests wait for it rather than for the data to go.
+  defp monitor_table_owner(resource, tenant) do
+    {:ok, %ETS.Set{table: table}} = Ash.DataLayer.Ets.TableManager.start(resource, tenant)
+
+    table
+    |> :ets.info(:owner)
+    |> Process.monitor()
   end
 
   defp filter_users(filter) do

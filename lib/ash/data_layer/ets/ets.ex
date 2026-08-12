@@ -76,13 +76,17 @@ defmodule Ash.DataLayer.Ets do
     @moduledoc false
     use GenServer
 
+    # Stopping a table means finding it by the same name that started it.
+    def table_name(resource, tenant) do
+      if tenant && Ash.Resource.Info.multitenancy_strategy(resource) == :context do
+        Module.concat(to_string(Ash.DataLayer.Ets.Info.table(resource)), to_string(tenant))
+      else
+        Ash.DataLayer.Ets.Info.table(resource)
+      end
+    end
+
     def start(resource, tenant) do
-      table =
-        if tenant && Ash.Resource.Info.multitenancy_strategy(resource) == :context do
-          Module.concat(to_string(Ash.DataLayer.Ets.Info.table(resource)), to_string(tenant))
-        else
-          Ash.DataLayer.Ets.Info.table(resource)
-        end
+      table = table_name(resource, tenant)
 
       if Ash.DataLayer.Ets.Info.private?(resource) do
         do_wrap_existing(resource, table)
@@ -143,7 +147,6 @@ defmodule Ash.DataLayer.Ets do
   end
 
   @doc "Stops the storage for a given resource/tenant (deleting all of the data)"
-  # sobelow_skip ["DOS.StringToAtom"]
   def stop(resource, tenant \\ nil) do
     tenant =
       if Ash.Resource.Info.multitenancy_strategy(resource) == :context do
@@ -151,22 +154,20 @@ defmodule Ash.DataLayer.Ets do
       end
 
     if Ash.DataLayer.Ets.Info.private?(resource) do
-      case Process.get({:ash_ets_table, resource, tenant}) do
+      key = {:ash_ets_table, Ash.DataLayer.Ets.Info.table(resource), tenant}
+
+      case Process.get(key) do
         nil ->
           :ok
 
         table ->
+          # The next read creates the table afresh, so the deleted one must not
+          # be left behind for it to wrap.
+          Process.delete(key)
           ETS.Set.delete(table)
       end
     else
-      table =
-        if tenant && Ash.Resource.Info.multitenancy_strategy(resource) == :context do
-          String.to_atom(to_string(tenant) <> to_string(resource))
-        else
-          resource
-        end
-
-      name = Module.concat(table, TableManager)
+      name = Module.concat(TableManager.table_name(resource, tenant), TableManager)
 
       case Process.whereis(name) do
         nil ->
