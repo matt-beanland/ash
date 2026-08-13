@@ -708,6 +708,64 @@ defmodule Ash.TemporalTest do
     end
   end
 
+  # Temporal requires an `Ash.Type.Range` with inclusive-exclusive bounds and says
+  # nothing about the inner type, so a resource can key its versions by an extent that
+  # is not time. Storage treats it as ordinary order and works; the `as_of` that reads
+  # it does not, in two different ways. All three are pinned, because the storage half
+  # should not be narrowed by accident and the other half should not be relied on.
+  describe "an extent that is not a period" do
+    alias Ash.Test.Temporal.EtsIntegerExtent
+
+    @first %Ash.Range{lower: 0, upper: 100, bounds: :"[)"}
+    @second %Ash.Range{lower: 100, upper: nil, bounds: :"[)"}
+
+    test "the extent joins the storage key" do
+      record = %EtsIntegerExtent{id: 1, name: "x", valid_over: @first}
+
+      assert Ash.DataLayer.Ets.pkey_map(EtsIntegerExtent, record) ==
+               %{id: 1, valid_over: @first}
+    end
+
+    test "versions of one record that overlap on the extent are refused" do
+      Ash.Seed.seed!(%EtsIntegerExtent{id: 1, name: "first", valid_over: @first})
+
+      # Adjacent is fine; the shared bound belongs to the later extent.
+      Ash.Seed.seed!(%EtsIntegerExtent{id: 1, name: "second", valid_over: @second})
+
+      assert_raise Ash.Error.Invalid, ~r/overlap/i, fn ->
+        Ash.Seed.seed!(%EtsIntegerExtent{
+          id: 1,
+          name: "clash",
+          valid_over: %Ash.Range{lower: 50, upper: 150, bounds: :"[)"}
+        })
+      end
+    end
+
+    # `Ash.Actions.Helpers.resolve_query_as_of/2` accepts `:now`, `%DateTime{}` and
+    # `nil` and nothing else, so a point on a non-time extent cannot be threaded
+    # through an action at all. If that clause generalises, this test says so.
+    test "narrowing to a point on the extent is refused by core" do
+      Ash.Seed.seed!(%EtsIntegerExtent{id: 1, name: "first", valid_over: @first})
+
+      assert_raise FunctionClauseError, fn ->
+        EtsIntegerExtent |> Ash.Query.as_of(50) |> Ash.read!()
+      end
+    end
+
+    # Worse than the refusal above, and the reason this arrangement must not be used:
+    # a read that names no point resolves one from the clock, and comparing a DateTime
+    # to an integer bound does not fail. `Comp` has no way to say two values are not
+    # ordered, so it falls to Erlang term order, where every struct sorts above every
+    # number — `Comp.compare(DateTime.utc_now(), 100) == :gt`. Every extent therefore
+    # looks started and only an unbounded upper looks unfinished.
+    test "a read naming no point silently answers from term order" do
+      Ash.Seed.seed!(%EtsIntegerExtent{id: 1, name: "first", valid_over: @first})
+      Ash.Seed.seed!(%EtsIntegerExtent{id: 1, name: "second", valid_over: @second})
+
+      assert ["second"] = EtsIntegerExtent |> Ash.read!() |> Enum.map(& &1.name)
+    end
+  end
+
   describe "the period attribute" do
     alias Ash.Test.Temporal.EtsVersioned
 
