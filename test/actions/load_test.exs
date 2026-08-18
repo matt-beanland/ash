@@ -649,6 +649,43 @@ defmodule Ash.Test.Actions.LoadTest do
     end
   end
 
+  defmodule CaptureSharedContext do
+    @moduledoc false
+    use Ash.Resource.Preparation
+
+    @impl true
+    def prepare(query, _opts, _context) do
+      send(self(), {:shared_context, query.context[:shared]})
+      query
+    end
+  end
+
+  defmodule PostWithSharedContextCapture do
+    @moduledoc false
+    use Ash.Resource,
+      domain: Domain,
+      data_layer: Ash.DataLayer.Ets
+
+    ets do
+      private?(true)
+    end
+
+    actions do
+      default_accept :*
+      defaults [:create]
+
+      read :read do
+        primary? true
+        prepare CaptureSharedContext
+      end
+    end
+
+    attributes do
+      uuid_primary_key :id
+      attribute :title, :string, public?: true
+    end
+  end
+
   describe "loads" do
     setup do
       start_supervised(
@@ -2458,5 +2495,14 @@ defmodule Ash.Test.Actions.LoadTest do
       assert [%{name: "A"}, %{name: "A"}] = Ash.load!(post, :a_categories).a_categories
       assert %{name: "A"} = Ash.load!(post, :a_category).a_category
     end
+  end
+
+  test "a load without time travel leaves the shared context untouched" do
+    post = Ash.create!(PostWithSharedContextCapture, %{title: "title"})
+    shared = %{some_id: Ash.UUID.generate()}
+
+    Ash.load!(post, [:title], context: %{shared: shared}, reuse_values?: false)
+
+    assert_receive {:shared_context, ^shared}
   end
 end
