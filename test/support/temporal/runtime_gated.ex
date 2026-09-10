@@ -4,8 +4,8 @@
 
 defmodule Ash.Test.Temporal.RuntimeGated do
   @moduledoc """
-  A temporal resource whose data layer decides at runtime whether it can read as of an
-  instant. See `Ash.Test.Temporal.RuntimeGatedDataLayer`.
+  A temporal resource whose data layer decides at runtime whether it can serve an `as_of`
+  at all. See `Ash.Test.Temporal.RuntimeGatedDataLayer`.
   """
   use Ash.Resource,
     domain: Ash.Test.Domain,

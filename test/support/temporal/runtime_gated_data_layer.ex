@@ -11,9 +11,10 @@ defmodule Ash.Test.Temporal.RuntimeGatedDataLayer do
   `Ash.Resource.Verifiers.ValidateTemporal` asks at compile time and fails the resource if
   the answer is false. So it grants temporal while compiling and may withdraw it later.
 
-  That is the only way to reach the branch in `Ash.Query.add_as_of/2` where a resource is
-  declared temporal and its data layer declines, so `supported?/1` makes the withdrawal
-  explicit for a test. It defaults to granting, which is what compilation needs.
+  That is the only way to reach the branches where a resource is declared temporal and its
+  data layer declines — `Ash.Query.add_as_of/2` on a read, `refuse_unserved_temporal/1` on
+  a write — so `supported?/1` makes the withdrawal explicit for a test. It defaults to
+  granting, which is what compilation needs.
   """
   use Spark.Dsl.Extension, transformers: [], sections: []
 
