@@ -1787,6 +1787,7 @@ defmodule Ash.Resource.Dsl do
   ]
 
   @transformers [
+    Ash.Resource.Transformers.RequireStringLengthCountConfig,
     Ash.Resource.Transformers.ResolvePipelines,
     Ash.Resource.Transformers.RequireUniqueActionNames,
     Ash.Resource.Transformers.SetRelationshipSource,

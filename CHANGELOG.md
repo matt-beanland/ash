@@ -8,6 +8,32 @@ SPDX-License-Identifier: MIT
 
 <!-- changelog -->
 
+## [v3.33.1](https://github.com/ash-project/ash/compare/v3.33.0...v3.33.1) (2026-09-08)
+
+
+
+
+### Improvements:
+
+* add `authorize_field?` option to `Ash.aggregate` by [@zachdaniel](https://github.com/zachdaniel)
+
+* allow more errors to be seen as "required errors" by [@zachdaniel](https://github.com/zachdaniel)
+
+## [v3.33.0](https://github.com/ash-project/ash/compare/v3.32.3...v3.33.0) (2026-09-05)
+
+
+
+
+### Features:
+
+* support `can_read` policy by [@zachdaniel](https://github.com/zachdaniel)
+
+### Bug Fixes:
+
+* bound string length by codepoints or bytes, not graphemes (CVE-2026-82752) by [@zachdaniel](https://github.com/zachdaniel)
+
+* authorize atomic updates on resources with more than one authorizer (#2912) by [@jimsynz](https://github.com/jimsynz) [(#2912)](https://github.com/ash-project/ash/pull/2912)
+
 ## [v3.32.3](https://github.com/ash-project/ash/compare/v3.32.2...v3.32.3) (2026-09-01)
 
 
