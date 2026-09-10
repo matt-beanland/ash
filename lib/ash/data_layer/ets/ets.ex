@@ -1892,8 +1892,8 @@ defmodule Ash.DataLayer.Ets do
   defp put_established_period(record, _attribute, %Ash.Range{}, _resource, _changeset), do: record
 
   defp put_established_period(record, attribute, nil, resource, changeset) do
-    case write_instant(resource, changeset) do
-      {:ok, as_of} -> Map.put(record, attribute, %Ash.Range{lower: as_of})
+    case write_period(resource, changeset) do
+      {:ok, period} -> Map.put(record, attribute, period)
       :error -> record
     end
   end
@@ -1909,6 +1909,35 @@ defmodule Ash.DataLayer.Ets do
   end
 
   # Casting through the inner type settles precision: `:datetime` is second-resolution.
+  # A range-valued `as_of` names the period outright; an instant opens one at it.
+  defp write_period(resource, %{as_of: %Ash.Range{} = as_of}) do
+    with %{type: type, constraints: constraints} <- Ash.Resource.Info.temporal_period(resource),
+         {:ok, bounded} <- resolve_bounds(as_of, Ash.Resource.Info.temporal_inner_type(resource)),
+         {:ok, period} <- Ash.Type.cast_input(type, bounded, constraints) do
+      {:ok, period}
+    else
+      _ -> :error
+    end
+  end
+
+  defp write_period(resource, changeset) do
+    case write_instant(resource, changeset) do
+      {:ok, instant} -> {:ok, %Ash.Range{lower: instant}}
+      :error -> :error
+    end
+  end
+
+  # A bound reads `:now` off the same clock a bare `:now` does, so the two spellings agree.
+  defp resolve_bounds(%Ash.Range{} = as_of, inner_type) do
+    with {:ok, lower} <- resolve_bound(as_of.lower, inner_type),
+         {:ok, upper} <- resolve_bound(as_of.upper, inner_type) do
+      {:ok, %{as_of | lower: lower, upper: upper}}
+    end
+  end
+
+  defp resolve_bound(:now, inner_type), do: now_for(inner_type)
+  defp resolve_bound(bound, _inner_type), do: {:ok, bound}
+
   defp write_instant(resource, changeset) do
     inner_type = Ash.Resource.Info.temporal_inner_type(resource)
 
@@ -1926,6 +1955,12 @@ defmodule Ash.DataLayer.Ets do
   end
 
   defp raw_instant(%{as_of: %DateTime{} = as_of}, _inner_type), do: {:ok, as_of}
+
+  # A range's portion begins at its lower bound, so that is the instant it supersedes at.
+  defp raw_instant(%{as_of: %Ash.Range{lower: nil}}, _inner_type), do: :error
+
+  defp raw_instant(%{as_of: %Ash.Range{lower: lower}}, inner_type),
+    do: resolve_bound(lower, inner_type)
 
   defp raw_instant(%{as_of: as_of}, inner_type) when as_of in [nil, :now],
     do: now_for(inner_type)
@@ -2203,7 +2238,7 @@ defmodule Ash.DataLayer.Ets do
 
   defp retire(table, pkey, resource, supersede) do
     case {supersede, ETS.Set.get(table, pkey)} do
-      {{period, as_of}, {:ok, {_key, stored}}} when is_map(stored) ->
+      {{period, %Ash.Range{lower: as_of}}, {:ok, {_key, stored}}} when is_map(stored) ->
         close_version(table, pkey, stored, resource, period, as_of)
 
       _ ->
@@ -2340,8 +2375,8 @@ defmodule Ash.DataLayer.Ets do
   # `nil` writes in place: no period, or a period with no now to supersede at.
   defp supersession(resource, changeset) do
     with period when not is_nil(period) <- Ash.Resource.Info.temporal_attribute(resource),
-         {:ok, as_of} <- write_instant(resource, changeset) do
-      {period, as_of}
+         {:ok, written} <- write_period(resource, changeset) do
+      {period, written}
     else
       _ -> nil
     end
@@ -2449,19 +2484,41 @@ defmodule Ash.DataLayer.Ets do
 
   defp write_version(table, pkey, _prior, data, _resource, nil), do: put_data(table, pkey, data)
 
-  # The new half ends where the old one did: an edit must not extend a closed version to
-  # forever. No transaction here, so the delete goes first — a reader sees the record
-  # absent, never twice.
-  defp write_version(table, pkey, prior_data, data, resource, {period, as_of}) do
+  # The new half ends where the old one did, unless `as_of` named a period of its own: an
+  # edit must not extend a closed version to forever. No transaction here, so the delete
+  # goes first — a reader sees the record absent, never twice.
+  defp write_version(table, pkey, prior_data, data, resource, {period, written}) do
     prior = Map.get(pkey, period)
+    as_of = written.lower
 
     with {:ok, closed} <- close_at(prior, as_of, resource, period),
+         {:ok, opening} <- open_at(prior, written, resource, period),
          {:ok, {_key, opened_data} = opened} <-
-           version(resource, pkey, period, data, %{prior | lower: as_of}),
+           version(resource, pkey, period, data, opening),
          {:ok, retained} <- retained(resource, pkey, period, prior_data, closed),
          {:ok, table} <- ETS.Set.delete(table, pkey),
          {:ok, _table} <- ETS.Set.put(table, retained ++ [opened]) do
       {:ok, opened_data}
+    end
+  end
+
+  # An unbounded written upper leaves the prior's in place, so a bare instant is unchanged.
+  defp open_at(prior, %Ash.Range{lower: lower, upper: nil}, _resource, _period),
+    do: {:ok, %{prior | lower: lower}}
+
+  defp open_at(%Ash.Range{} = prior, %Ash.Range{} = written, resource, period) do
+    opening = %{prior | lower: written.lower, upper: written.upper, bounds: written.bounds}
+
+    if Ash.Range.contains?(prior, opening) do
+      {:ok, opening}
+    else
+      {:error,
+       Ash.Error.Changes.PeriodOutOfBounds.exception(
+         resource: resource,
+         field: period,
+         period: opening,
+         within: prior
+       )}
     end
   end
 
