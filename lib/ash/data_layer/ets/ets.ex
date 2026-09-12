@@ -1892,7 +1892,7 @@ defmodule Ash.DataLayer.Ets do
   defp put_established_period(record, _attribute, %Ash.Range{}, _resource, _changeset), do: record
 
   defp put_established_period(record, attribute, nil, resource, changeset) do
-    case write_period(resource, changeset) do
+    case Ash.Temporal.write_period(resource, write_as_of(changeset)) do
       {:ok, period} -> Map.put(record, attribute, period)
       :error -> record
     end
@@ -1902,88 +1902,15 @@ defmodule Ash.DataLayer.Ets do
 
   # Without an instant the query sees every version, not the one holding it.
   defp upsert_instant(resource, changeset) do
-    case write_instant(resource, changeset) do
+    case Ash.Temporal.write_instant(resource, write_as_of(changeset)) do
       {:ok, instant} -> instant
       :error -> nil
     end
   end
 
-  # Casting through the inner type settles precision: `:datetime` is second-resolution.
-  # A range-valued `as_of` names the period outright; an instant opens one at it.
-  defp write_period(resource, %{as_of: %Ash.Range{} = as_of}) do
-    with %{type: type, constraints: constraints} <- Ash.Resource.Info.temporal_period(resource),
-         {:ok, bounded} <- resolve_bounds(as_of, Ash.Resource.Info.temporal_inner_type(resource)),
-         {:ok, period} <- Ash.Type.cast_input(type, bounded, constraints) do
-      {:ok, period}
-    else
-      _ -> :error
-    end
-  end
-
-  defp write_period(resource, changeset) do
-    case write_instant(resource, changeset) do
-      {:ok, instant} -> {:ok, %Ash.Range{lower: instant}}
-      :error -> :error
-    end
-  end
-
-  # A bound reads `:now` off the same clock a bare `:now` does, so the two spellings agree.
-  defp resolve_bounds(%Ash.Range{} = as_of, inner_type) do
-    with {:ok, lower} <- resolve_bound(as_of.lower, inner_type),
-         {:ok, upper} <- resolve_bound(as_of.upper, inner_type) do
-      {:ok, %{as_of | lower: lower, upper: upper}}
-    end
-  end
-
-  defp resolve_bound(:now, inner_type), do: now_for(inner_type)
-  defp resolve_bound(bound, _inner_type), do: {:ok, bound}
-
-  defp write_instant(resource, changeset) do
-    inner_type = Ash.Resource.Info.temporal_inner_type(resource)
-
-    with {:ok, raw} <- raw_instant(changeset, inner_type),
-         {:ok, instant} <-
-           Ash.Type.cast_input(
-             inner_type,
-             raw,
-             Ash.Resource.Info.temporal_inner_constraints(resource) || []
-           ) do
-      {:ok, instant}
-    else
-      _ -> :error
-    end
-  end
-
-  defp raw_instant(%{as_of: %DateTime{} = as_of}, _inner_type), do: {:ok, as_of}
-
-  # A range's portion begins at its lower bound, so that is the instant it supersedes at.
-  defp raw_instant(%{as_of: %Ash.Range{lower: nil}}, _inner_type), do: :error
-
-  defp raw_instant(%{as_of: %Ash.Range{lower: lower}}, inner_type),
-    do: resolve_bound(lower, inner_type)
-
-  defp raw_instant(%{as_of: as_of}, inner_type) when as_of in [nil, :now],
-    do: now_for(inner_type)
-
-  defp raw_instant(_changeset, _inner_type), do: :error
-
-  # Resolved through `get_type/1`: an inner type reads back as a module, and matching the
-  # short names alone silently answers `:error`.
-  defp now_for(inner_type) do
-    case Ash.Type.get_type(inner_type) do
-      type when type in [Ash.Type.DateTime, Ash.Type.UtcDatetime, Ash.Type.UtcDatetimeUsec] ->
-        {:ok, DateTime.utc_now()}
-
-      Ash.Type.NaiveDatetime ->
-        {:ok, NaiveDateTime.utc_now()}
-
-      Ash.Type.Date ->
-        {:ok, Date.utc_today()}
-
-      _ ->
-        :error
-    end
-  end
+  # A write that is not time travelling names no instant, and takes effect now.
+  defp write_as_of(%{as_of: nil}), do: :now
+  defp write_as_of(%{as_of: as_of}), do: as_of
 
   defp set_loaded(%resource{} = record) do
     %{record | __meta__: %Ecto.Schema.Metadata{state: :loaded, schema: resource}}
@@ -2423,7 +2350,7 @@ defmodule Ash.DataLayer.Ets do
   # `nil` writes in place: no period, or a period with no now to supersede at.
   defp supersession(resource, changeset) do
     with period when not is_nil(period) <- Ash.Resource.Info.temporal_attribute(resource),
-         {:ok, written} <- write_period(resource, changeset) do
+         {:ok, written} <- Ash.Temporal.write_period(resource, write_as_of(changeset)) do
       {period, written}
     else
       _ -> nil
