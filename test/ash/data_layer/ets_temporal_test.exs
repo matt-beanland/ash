@@ -587,6 +587,24 @@ defmodule Ash.DataLayer.EtsTemporalTest do
     # `raw_instant/2` refuses a range with no lower bound rather than guessing one, so the
     # write finds no version to supersede and the record is left untouched. Pinned so that
     # changing it is a visible decision rather than a drift.
+    # The read side takes the instant the portion begins at, so a write's own read leg finds
+    # the version it is about to supersede.
+    test "a range on a read narrows to the point its period begins at" do
+      Ash.Seed.seed!(%EtsVersioned{id: 1, name: "first", valid_at: @early})
+
+      assert [%{name: "first"}] =
+               EtsVersioned |> Ash.Query.as_of(@portion) |> Ash.read!()
+
+      assert Ash.Query.as_of(EtsVersioned, @portion).as_of == @portion.lower
+    end
+
+    # `nil` already means "no particular instant", so a range that resolves to one has to
+    # refuse by name rather than read as current state.
+    test "a range with no lower bound is refused by name on a read" do
+      assert %{errors: [%Ash.Error.Query.AsOfNotAnInstant{}]} =
+               Ash.Query.as_of(EtsVersioned, %Ash.Range{lower: nil, upper: nil, bounds: :"[)"})
+    end
+
     test "a range with no lower bound is refused, and changes nothing" do
       record = Ash.Seed.seed!(%EtsVersioned{id: 1, name: "first", valid_at: @early})
 
@@ -631,6 +649,27 @@ defmodule Ash.DataLayer.EtsTemporalTest do
           valid_over: %Ash.Range{lower: 50, upper: 150, bounds: :"[)"}
         })
       end
+    end
+
+    # ⭐ A period is an ordered extent, not a clock. A range-valued `as_of` over integers is
+    # the same write as one over instants, and this is the only arm that can show it —
+    # AshPostgres' temporal is datetime-only.
+    test "a range-valued as_of establishes a period over a non-datetime extent" do
+      created =
+        EtsIntegerExtent
+        |> Ash.Changeset.for_create(:create, %{id: 1, name: "ranged"},
+          as_of: %Ash.Range{lower: 10, upper: 20, bounds: :"[)"}
+        )
+        |> Ash.create!()
+
+      assert %Ash.Range{lower: 10, upper: 20} = created.valid_over
+    end
+
+    # Refused twice over: `now_for/1` has no current value to give, and casting a `DateTime`
+    # into the extent would fail anyway. The contract is `:error`, not which guard produces it.
+    test "an as_of of :now over a non-datetime extent has no instant to resolve" do
+      assert :error = Ash.Temporal.write_instant(EtsIntegerExtent, :now)
+      assert :error = Ash.Temporal.write_period(EtsIntegerExtent, :now)
     end
 
     # `resolve_query_as_of/2` takes `:now`, a `DateTime` and `nil`, and nothing else.
