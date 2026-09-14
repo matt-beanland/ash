@@ -46,7 +46,13 @@ defmodule Ash.Domain.Dsl do
       trace_name: [
         type: :string,
         doc: """
-        The name to use in traces. Defaults to the last part of the module. See the [monitoring guide](/documentation/topics/monitoring.md) for more
+        The name to use in traces. Defaults to the short_name stringified. See the [monitoring guide](/documentation/topics/monitoring.md) for more
+        """
+      ],
+      short_name: [
+        type: :atom,
+        doc: """
+        A short identifier for the domain, which should be unique. See the [monitoring guide](/documentation/topics/advanced/monitoring.md) for more.
         """
       ]
     ]
