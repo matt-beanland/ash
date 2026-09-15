@@ -598,6 +598,17 @@ defmodule Ash.DataLayer.EtsTemporalTest do
       assert Ash.Query.as_of(EtsVersioned, @portion).as_of == @portion.lower
     end
 
+    # `as_of:` in opts and `as_of/2` on the query are two spellings of one thing. They
+    # reach different code, and only one of them used to know about ranges — the other
+    # raised a FunctionClauseError.
+    test "both spellings of a read's as_of narrow a range the same way" do
+      Ash.Seed.seed!(%EtsVersioned{id: 1, name: "first", valid_at: @early})
+
+      assert Ash.Query.as_of(EtsVersioned, @portion).as_of == @portion.lower
+
+      assert {:ok, _} = EtsVersioned |> Ash.Query.new() |> Ash.read(as_of: @portion)
+    end
+
     # `nil` already means "no particular instant", so a range that resolves to one has to
     # refuse by name rather than read as current state.
     test "a range with no lower bound is refused by name on a read" do

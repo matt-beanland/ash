@@ -427,6 +427,12 @@ defmodule Ash.Actions.Helpers do
   defp resolve_query_as_of(_query, :now), do: DateTime.utc_now()
   defp resolve_query_as_of(_query, %DateTime{} = as_of), do: as_of
 
+  # A range reaches a read the same way it reaches `Ash.Query.as_of/2` — a write's `as_of`
+  # threads to its own read leg — so it narrows the same way, to the instant its period
+  # begins at. Handled here as well as there because `as_of:` in opts and `as_of/2` on the
+  # query are two spellings of one thing, and they must not answer differently.
+  defp resolve_query_as_of(_query, %Ash.Range{} = as_of), do: as_of
+
   defp resolve_query_as_of(query, nil) do
     if Ash.Resource.Info.temporal?(query.resource), do: DateTime.utc_now()
   end
