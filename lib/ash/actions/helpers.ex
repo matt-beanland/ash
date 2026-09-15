@@ -328,7 +328,7 @@ defmodule Ash.Actions.Helpers do
   # make the reload miss it. Those are left for `load` to default to the current instant.
   # A range is concrete in the same way, and stamps the instant it begins at.
   def put_write_as_of(metadata, resource, %Ash.Range{} = as_of),
-    do: put_write_as_of(metadata, resource, Ash.Query.resolve_as_of(as_of))
+    do: put_write_as_of(metadata, resource, Ash.Temporal.resolve_as_of(as_of))
 
   def put_write_as_of(metadata, resource, %DateTime{} = as_of) do
     if Ash.Resource.Info.temporal?(resource) do
@@ -346,7 +346,7 @@ defmodule Ash.Actions.Helpers do
   # remapped for nothing.
   def stamp_record_metadata(records, resource, opts) do
     tenant = opts[:tenant]
-    as_of = Ash.Query.resolve_as_of(opts[:as_of])
+    as_of = Ash.Temporal.resolve_as_of(opts[:as_of])
     stamp_as_of? = match?(%DateTime{}, as_of) and Ash.Resource.Info.temporal?(resource)
 
     if is_nil(tenant) and not stamp_as_of? do
