@@ -1574,6 +1574,13 @@ defmodule Ash.Filter do
     add_ref_to_relevant_paths({rest, ref}, new_acc, new_trail)
   end
 
+  @doc """
+  Rewrites an expression by applying a function to every node of it.
+
+  Takes a filter or a bare expression and returns the same shape. Return
+  `{:halt, expression}` to substitute a node and stop descending into it; a filter
+  with no expression comes back untouched.
+  """
   def map(%__MODULE__{expression: nil} = filter, _) do
     filter
   end
@@ -2726,6 +2733,12 @@ defmodule Ash.Filter do
 
   def embed_predicates(other), do: other
 
+  @doc """
+  Returns the refs an expression names, deduplicated.
+
+  Refs into a combination query are excluded, so this answers what the expression
+  reads from the resource itself.
+  """
   def list_refs(
         expression,
         no_longer_simple? \\ false,
@@ -4172,6 +4185,15 @@ defmodule Ash.Filter do
     end
   end
 
+  @doc """
+  Binds the refs in an expression to a resource, returning `{:ok, expression}`.
+
+  An expression built outside a query, such as a calculation's, carries unresolved
+  refs that name a field but no resource. This resolves them against
+  `context.resource`, and answers `{:error, reason}` for a ref that resource has no
+  field for.
+  """
+  @spec hydrate_refs(term(), map()) :: {:ok, term()} | {:error, term()}
   def hydrate_refs(value, context) do
     context =
       context
