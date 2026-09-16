@@ -177,12 +177,19 @@ defmodule Ash.Temporal do
   defp resolve_bound(:now, inner_type), do: now_for(inner_type)
   defp resolve_bound(bound, _inner_type), do: {:ok, bound}
 
+  # One clause per shape a period's bounds are built from. `cast_input/3` in the caller
+  # decides whether THIS resource's extent accepts the one it was given.
   defp raw_instant(%DateTime{} = as_of, _inner_type), do: {:ok, as_of}
+  defp raw_instant(%NaiveDateTime{} = as_of, _inner_type), do: {:ok, as_of}
+  defp raw_instant(%Date{} = as_of, _inner_type), do: {:ok, as_of}
 
   # A range's portion begins at its lower bound, so that is the instant it supersedes at.
   defp raw_instant(%Ash.Range{lower: nil}, _inner_type), do: :error
   defp raw_instant(%Ash.Range{lower: lower}, inner_type), do: resolve_bound(lower, inner_type)
 
   defp raw_instant(:now, inner_type), do: now_for(inner_type)
+
+  # Anything else is refused rather than cast. A string may parse as either a date or a
+  # datetime, and picking one is guessing.
   defp raw_instant(_as_of, _inner_type), do: :error
 end
