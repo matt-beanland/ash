@@ -581,8 +581,6 @@ defmodule Ash.DataLayer.EtsTemporalTest do
       assert DateTime.compare(bound, bare) in [:eq, :gt]
     end
 
-    # `raw_instant/2` refuses a range with no lower bound, so the write finds no version to
-    # supersede and the record is left untouched.
     # The read side takes the instant the portion begins at, so a write's own read leg finds
     # the version it supersedes.
     test "a range on a read narrows to the point its period begins at" do
@@ -611,6 +609,8 @@ defmodule Ash.DataLayer.EtsTemporalTest do
                Ash.Query.as_of(EtsVersioned, %Ash.Range{lower: nil, upper: nil, bounds: :"[)"})
     end
 
+    # `raw_instant/2` refuses it rather than guessing a bound, so the write finds no version
+    # to supersede and the record is left untouched.
     test "a range with no lower bound is refused, and changes nothing" do
       record = Ash.Seed.seed!(%EtsVersioned{id: 1, name: "first", valid_at: @early})
 
