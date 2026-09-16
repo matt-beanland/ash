@@ -424,15 +424,26 @@ defmodule Ash.Actions.Helpers do
   defp set_subject_as_of(%Ash.ActionInput{} = input, as_of),
     do: Ash.ActionInput.set_as_of(input, as_of)
 
-  defp resolve_query_as_of(_query, :now), do: DateTime.utc_now()
+  defp resolve_query_as_of(query, :now), do: now_in_extent(query.resource)
   defp resolve_query_as_of(_query, %DateTime{} = as_of), do: as_of
+  defp resolve_query_as_of(_query, %NaiveDateTime{} = as_of), do: as_of
+  defp resolve_query_as_of(_query, %Date{} = as_of), do: as_of
 
   # Narrowed here as well as in `Ash.Query.as_of/2`: `as_of:` in opts and `as_of/2` on the
   # query reach different code and must not answer differently.
   defp resolve_query_as_of(_query, %Ash.Range{} = as_of), do: as_of
 
   defp resolve_query_as_of(query, nil) do
-    if Ash.Resource.Info.temporal?(query.resource), do: DateTime.utc_now()
+    if Ash.Resource.Info.temporal?(query.resource), do: now_in_extent(query.resource)
+  end
+
+  # A read filters on the period a resource builds from its extent, so `now` has to be a
+  # value that extent can be compared against. Anything with no extent takes the wall clock.
+  defp now_in_extent(resource) do
+    case Ash.Temporal.now_for(Ash.Resource.Info.temporal_inner_type(resource)) do
+      {:ok, now} -> now
+      :error -> DateTime.utc_now()
+    end
   end
 
   defp add_actor(opts, query_or_changeset, domain) do
