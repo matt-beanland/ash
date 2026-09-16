@@ -493,9 +493,8 @@ defmodule Ash.DataLayer.EtsTemporalTest do
     end
   end
 
-  # A range-valued `as_of` names the PORTION a write applies to, rather than the instant it
-  # opens at. Ported from `AshPostgres.TemporalTest`'s "an as_of naming a period", so the two
-  # arms assert the same behaviour over the same shapes.
+  # A range-valued `as_of` names the portion a write applies to, rather than the instant it
+  # opens at.
   describe "an as_of naming a period" do
     @portion %Ash.Range{
       lower: ~U[2020-06-01 00:00:00Z],
@@ -503,7 +502,6 @@ defmodule Ash.DataLayer.EtsTemporalTest do
       bounds: :"[)"
     }
 
-    # Bounds as well as names, so a three-way split is provable by reading alone.
     defp versions_at(instants) do
       Enum.flat_map(instants, fn instant ->
         EtsVersioned
@@ -520,7 +518,7 @@ defmodule Ash.DataLayer.EtsTemporalTest do
         |> Ash.Changeset.for_create(:create, %{id: 1, name: "ranged"}, as_of: @portion)
         |> Ash.create!()
 
-      # The discriminating half: an instant-valued `as_of` leaves the upper unbounded.
+      # An instant-valued `as_of` leaves the upper unbounded.
       assert %Ash.Range{
                lower: ~U[2020-06-01 00:00:00Z],
                upper: ~U[2020-09-01 00:00:00Z]
@@ -534,7 +532,7 @@ defmodule Ash.DataLayer.EtsTemporalTest do
 
       assert updated.valid_at == @portion
 
-      # `first` held [2020-01-01, 2021-01-01); the portion splits it in THREE.
+      # `first` held [2020-01-01, 2021-01-01); the portion splits it in three.
       assert [
                {"first", ~U[2020-01-01 00:00:00Z], ~U[2020-06-01 00:00:00Z]},
                {"second", ~U[2020-06-01 00:00:00Z], ~U[2020-09-01 00:00:00Z]},
@@ -568,8 +566,7 @@ defmodule Ash.DataLayer.EtsTemporalTest do
     end
 
     # A bound reads `:now` off the same clock a bare `:now` does, so the two spellings agree.
-    # Asserted on the resolver rather than through a write: an explicit `:now` cannot reach
-    # the data layer at all today, which is a separate defect.
+    # Asserted on the resolver: an explicit `:now` does not reach the data layer today.
     test "a bound of :now resolves against the same clock a bare :now does" do
       assert {:ok, %Ash.Range{lower: bare, upper: nil}} =
                Ash.Temporal.write_period(EtsVersioned, :now)
@@ -584,11 +581,8 @@ defmodule Ash.DataLayer.EtsTemporalTest do
       assert DateTime.compare(bound, bare) in [:eq, :gt]
     end
 
-    # `raw_instant/2` refuses a range with no lower bound rather than guessing one, so the
-    # write finds no version to supersede and the record is left untouched. Pinned so that
-    # changing it is a visible decision rather than a drift.
     # The read side takes the instant the portion begins at, so a write's own read leg finds
-    # the version it is about to supersede.
+    # the version it supersedes.
     test "a range on a read narrows to the point its period begins at" do
       Ash.Seed.seed!(%EtsVersioned{id: 1, name: "first", valid_at: @early})
 
@@ -598,9 +592,8 @@ defmodule Ash.DataLayer.EtsTemporalTest do
       assert Ash.Query.as_of(EtsVersioned, @portion).as_of == @portion.lower
     end
 
-    # `as_of:` in opts and `as_of/2` on the query are two spellings of one thing. They
-    # reach different code, and only one of them used to know about ranges — the other
-    # raised a FunctionClauseError.
+    # `as_of:` in opts and `as_of/2` on the query reach different code, so both are named
+    # here.
     test "both spellings of a read's as_of narrow a range the same way" do
       Ash.Seed.seed!(%EtsVersioned{id: 1, name: "first", valid_at: @early})
 
@@ -616,6 +609,8 @@ defmodule Ash.DataLayer.EtsTemporalTest do
                Ash.Query.as_of(EtsVersioned, %Ash.Range{lower: nil, upper: nil, bounds: :"[)"})
     end
 
+    # `raw_instant/2` refuses it rather than guessing a bound, so the write finds no version
+    # to supersede and the record is left untouched.
     test "a range with no lower bound is refused, and changes nothing" do
       record = Ash.Seed.seed!(%EtsVersioned{id: 1, name: "first", valid_at: @early})
 
@@ -662,9 +657,7 @@ defmodule Ash.DataLayer.EtsTemporalTest do
       end
     end
 
-    # ⭐ A period is an ordered extent, not a clock. A range-valued `as_of` over integers is
-    # the same write as one over instants, and this is the only arm that can show it —
-    # AshPostgres' temporal is datetime-only.
+    # A period is an ordered extent, not a clock, and this is the only arm that can show it.
     test "a range-valued as_of establishes a period over a non-datetime extent" do
       created =
         EtsIntegerExtent
@@ -676,8 +669,7 @@ defmodule Ash.DataLayer.EtsTemporalTest do
       assert %Ash.Range{lower: 10, upper: 20} = created.valid_over
     end
 
-    # Refused twice over: `now_for/1` has no current value to give, and casting a `DateTime`
-    # into the extent would fail anyway. The contract is `:error`, not which guard produces it.
+    # The contract is `:error`, not which of the two guards produces it.
     test "an as_of of :now over a non-datetime extent has no instant to resolve" do
       assert :error = Ash.Temporal.write_instant(EtsIntegerExtent, :now)
       assert :error = Ash.Temporal.write_period(EtsIntegerExtent, :now)

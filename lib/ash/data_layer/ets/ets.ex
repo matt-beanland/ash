@@ -2173,9 +2173,8 @@ defmodule Ash.DataLayer.Ets do
     end
   end
 
-  # A destroy ends validity over the period it names — an instant ends it outright, a range
-  # carves that portion out and validity resumes after it. Closing a version at the instant
-  # it began leaves nothing to keep, so it goes.
+  # A destroy ends validity over the period it names. Closing a version at the instant it
+  # began leaves nothing to keep, so it goes.
   defp close_version(table, pkey, stored, resource, period, written) do
     prior = Map.get(pkey, period)
 
@@ -2459,9 +2458,8 @@ defmodule Ash.DataLayer.Ets do
 
   defp write_version(table, pkey, _prior, data, _resource, nil), do: put_data(table, pkey, data)
 
-  # An edit applies over the period `as_of` names and no further: the prior version keeps
-  # what lies outside it, on both sides. No transaction here, so the delete goes first — a
-  # reader sees the record absent, never twice.
+  # No transaction here, so the delete goes first: a reader sees the record absent, never
+  # twice.
   defp write_version(table, pkey, prior_data, data, resource, {period, written}) do
     prior = Map.get(pkey, period)
 

@@ -2849,8 +2849,8 @@ defmodule Ash.Query do
     end
   end
 
-  # A write's `as_of` reaches its own read leg through this same context, so a range arrives
-  # here; it begins at its lower bound, which is the instant the version it supersedes holds.
+  # A write's `as_of` reaches its own read leg through this context, so a range arrives here
+  # even when no caller passed one.
   defp narrow_as_of(query, %Ash.Range{lower: nil} = as_of) do
     add_error(
       query,
