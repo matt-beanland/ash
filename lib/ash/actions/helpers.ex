@@ -421,6 +421,8 @@ defmodule Ash.Actions.Helpers do
 
   defp resolve_query_as_of(_query, :now), do: DateTime.utc_now()
   defp resolve_query_as_of(_query, %DateTime{} = as_of), do: as_of
+  defp resolve_query_as_of(_query, %NaiveDateTime{} = as_of), do: as_of
+  defp resolve_query_as_of(_query, %Date{} = as_of), do: as_of
 
   defp resolve_query_as_of(query, nil) do
     if Ash.Resource.Info.temporal?(query.resource), do: DateTime.utc_now()
