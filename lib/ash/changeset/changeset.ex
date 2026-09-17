@@ -1949,7 +1949,15 @@ defmodule Ash.Changeset do
       doc: "set the tenant on the changeset"
     ],
     as_of: [
-      type: {:or, [{:struct, DateTime}, {:literal, :now}, {:literal, nil}]},
+      type:
+        {:or,
+         [
+           {:struct, DateTime},
+           {:struct, NaiveDateTime},
+           {:struct, Date},
+           {:literal, :now},
+           {:literal, nil}
+         ]},
       doc:
         "set the `as_of` point in time on the changeset (time travel). See `Ash.Changeset.as_of/2`."
     ],
