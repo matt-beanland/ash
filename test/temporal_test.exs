@@ -380,6 +380,11 @@ defmodule Ash.TemporalTest do
       query = Ash.Query.as_of(Ash.Test.Temporal.EtsDateExtent, ~D[2020-06-15])
       assert {:ok, [%{id: 1}]} = Ash.read(query)
     end
+
+    test "reads at a date passed in opts" do
+      assert {:ok, [%{id: 1}]} =
+               Ash.read(Ash.Test.Temporal.EtsDateExtent, as_of: ~D[2020-06-15])
+    end
   end
 
   describe "Ash.Temporal.write_period/2" do
