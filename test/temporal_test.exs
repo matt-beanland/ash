@@ -350,6 +350,19 @@ defmodule Ash.TemporalTest do
       assert :error = Ash.Temporal.write_instant(Ash.Test.Temporal.EtsVersioned, nil)
       assert :error = Ash.Temporal.write_instant(Ash.Test.Temporal.EtsVersioned, "2020-06-15")
     end
+
+    test "resolves a date and a naive datetime, not only a datetime" do
+      assert {:ok, ~D[2020-06-15]} =
+               Ash.Temporal.write_instant(Ash.Test.Temporal.EtsDateExtent, ~D[2020-06-15])
+
+      assert {:ok, ~U[2020-06-15 12:00:00Z]} =
+               Ash.Temporal.write_instant(Ash.Test.Temporal.EtsVersioned, ~N[2020-06-15 12:00:00])
+    end
+
+    test "casts a date onto a datetime extent at midnight" do
+      assert {:ok, ~U[2020-06-15 00:00:00Z]} =
+               Ash.Temporal.write_instant(Ash.Test.Temporal.EtsVersioned, ~D[2020-06-15])
+    end
   end
 
   describe "Ash.Temporal.write_period/2" do
