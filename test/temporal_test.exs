@@ -365,6 +365,23 @@ defmodule Ash.TemporalTest do
     end
   end
 
+  describe "an as_of in the type the resource builds its periods from" do
+    setup do
+      Ash.Seed.seed!(Ash.Test.Temporal.EtsDateExtent, %{
+        id: 1,
+        name: "a",
+        valid_on: %Ash.Range{lower: ~D[2020-01-01], upper: ~D[2021-01-01], bounds: :"[)"}
+      })
+
+      :ok
+    end
+
+    test "reads at a date set on the query" do
+      query = Ash.Query.as_of(Ash.Test.Temporal.EtsDateExtent, ~D[2020-06-15])
+      assert {:ok, [%{id: 1}]} = Ash.read(query)
+    end
+  end
+
   describe "Ash.Temporal.write_period/2" do
     test "opens a period at the instant, unbounded above" do
       assert {:ok, %Ash.Range{lower: lower, upper: nil}} =
