@@ -592,7 +592,7 @@ defmodule Ash do
                              "Global options"
                            )
                            |> Spark.Options.merge(
-                             Keyword.delete(@stream_opts, :batch_size),
+                             Keyword.drop(@stream_opts, [:batch_size, :as_of]),
                              "Stream Options"
                            )
                            |> Spark.Options.merge(
@@ -653,7 +653,7 @@ defmodule Ash do
                               "Global options"
                             )
                             |> Spark.Options.merge(
-                              Keyword.delete(@stream_opts, :batch_size),
+                              Keyword.drop(@stream_opts, [:batch_size, :as_of]),
                               "Stream Options"
                             )
                             |> Spark.Options.merge(

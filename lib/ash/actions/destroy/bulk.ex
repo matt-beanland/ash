@@ -109,25 +109,33 @@ defmodule Ash.Actions.Destroy.Bulk do
           if query.__validated_for_action__ do
             {query, opts}
           else
-            {query, opts} = Ash.Actions.Helpers.set_context_and_get_opts(domain, query, opts)
+            {query, read_opts} =
+              Ash.Actions.Helpers.set_context_and_get_opts(
+                domain,
+                query,
+                Ash.Actions.Helpers.read_as_of(opts)
+              )
 
             query =
               Ash.Query.for_read(
                 query,
-                Ash.Actions.Update.Bulk.get_read_action(query.resource, action, opts).name,
+                Ash.Actions.Update.Bulk.get_read_action(query.resource, action, read_opts).name,
                 %{},
-                actor: opts[:actor],
-                tenant: opts[:tenant],
+                actor: read_opts[:actor],
+                tenant: read_opts[:tenant],
                 context: %{query_for: :bulk_destroy}
               )
 
-            {query, opts}
+            {query, Keyword.merge(read_opts, Keyword.take(opts, [:as_of]))}
           end
 
         query = %{query | domain: domain}
 
         fully_atomic_changeset =
           cond do
+            Ash.Actions.Helpers.each_record?(query.resource, opts) ->
+              {:not_atomic, "a range-valued as_of writes each record as a single write does"}
+
             not_atomic_reason ->
               {:not_atomic, not_atomic_reason}
 
@@ -174,6 +182,7 @@ defmodule Ash.Actions.Destroy.Bulk do
           {:not_atomic, reason} ->
             read_opts =
               opts
+              |> Ash.Actions.Helpers.read_as_of()
               |> then(fn read_opts ->
                 if opts[:stream_batch_size] do
                   Keyword.put(read_opts, :batch_size, opts[:stream_batch_size])
@@ -456,6 +465,14 @@ defmodule Ash.Actions.Destroy.Bulk do
   end
 
   def run(domain, stream, action, input, opts, not_atomic_reason) do
+    if Ash.Actions.Helpers.each_record?(opts[:resource], opts) do
+      Ash.Actions.Helpers.run_each(domain, stream, action, input, opts)
+    else
+      run_stream(domain, stream, action, input, opts, not_atomic_reason)
+    end
+  end
+
+  defp run_stream(domain, stream, action, input, opts, not_atomic_reason) do
     opts = Ash.Actions.Helpers.apply_scope_to_opts(opts)
     resource = opts[:resource]
 

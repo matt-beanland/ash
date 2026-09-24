@@ -1146,4 +1146,89 @@ defmodule Ash.Actions.Helpers do
       :ok
     end
   end
+
+  @doc false
+  # Only a temporal resource has versions for a range to reach. The single-record path carries
+  # its own atomic changeset, and is where each record is sent.
+  def each_record?(resource, opts) do
+    match?(%Ash.Range{}, opts[:as_of]) and is_nil(opts[:atomic_changeset]) and
+      not is_nil(resource) and Ash.Resource.Info.temporal?(resource)
+  end
+
+  @doc false
+  # A range-valued `as_of` writes each record as `Ash.update/3` or `Ash.destroy/2` would, so
+  # the range reaches every version of the record it overlaps.
+  def run_each(domain, records, action, input, opts) do
+    action =
+      case action do
+        %{name: _} -> action
+        name -> Ash.Resource.Info.action(opts[:resource], name)
+      end
+
+    changeset_opts =
+      Keyword.take(opts, [
+        :actor,
+        :tenant,
+        :authorize?,
+        :tracer,
+        :context,
+        :as_of,
+        :scope,
+        :skip_unknown_inputs,
+        :private_arguments
+      ])
+      |> Enum.reject(&is_nil(elem(&1, 1)))
+
+    results = Enum.map(records, &write_one(&1, domain, action, input, changeset_opts, opts))
+    written = for {:ok, record} <- results, do: record
+    errors = for {:error, error} <- results, do: error
+
+    %Ash.BulkResult{
+      status:
+        cond do
+          errors == [] -> :success
+          written == [] -> :error
+          true -> :partial_success
+        end,
+      error_count: length(errors),
+      errors: if(opts[:return_errors?], do: errors, else: []),
+      records: if(opts[:return_records?], do: written)
+    }
+  end
+
+  defp write_one(record, domain, %{type: :destroy} = action, input, changeset_opts, opts) do
+    write_opts =
+      opts
+      |> Keyword.take(Keyword.keys(Ash.destroy_opts()))
+      |> Keyword.drop([:return_notifications?])
+      |> Enum.reject(&is_nil(elem(&1, 1)))
+      |> Keyword.merge(domain: domain, return_destroyed?: true)
+
+    record
+    |> Ash.Changeset.for_destroy(action.name, input, changeset_opts)
+    |> Ash.destroy(write_opts)
+  end
+
+  defp write_one(record, domain, action, input, changeset_opts, opts) do
+    write_opts =
+      opts
+      |> Keyword.take(Keyword.keys(Ash.update_opts()))
+      |> Keyword.drop([:return_notifications?])
+      |> Enum.reject(&is_nil(elem(&1, 1)))
+      |> Keyword.put(:domain, domain)
+
+    record
+    |> Ash.Changeset.for_update(action.name, input, changeset_opts)
+    |> Ash.update(write_opts)
+  end
+
+  @doc false
+  # A range names the portion the write applies to; the read selecting records takes its own
+  # instant.
+  def read_as_of(opts) do
+    case opts[:as_of] do
+      %Ash.Range{} -> Keyword.delete(opts, :as_of)
+      _ -> opts
+    end
+  end
 end
