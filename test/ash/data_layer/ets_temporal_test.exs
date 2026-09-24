@@ -864,4 +864,124 @@ defmodule Ash.DataLayer.EtsTemporalTest do
       assert ["second"] = EtsIntegerExtent |> Ash.read!() |> Enum.map(& &1.name)
     end
   end
+
+  # Each record is written as `Ash.update/3` or `Ash.destroy/2` would write it.
+  describe "a bulk write over a range" do
+    @since %Ash.Range{lower: ~U[2020-01-01 00:00:00Z], upper: nil, bounds: :"[)"}
+    @carve %Ash.Range{
+      lower: ~U[2020-06-01 00:00:00Z],
+      upper: ~U[2020-09-01 00:00:00Z],
+      bounds: :"[)"
+    }
+
+    setup do
+      Ash.Seed.seed!(%EtsVersioned{id: 1, name: "first", valid_at: @since})
+      Ash.Seed.seed!(%EtsVersioned{id: 2, name: "first", valid_at: @since})
+      :ok
+    end
+
+    defp timeline(id) do
+      [~U[2020-03-01 00:00:00Z], ~U[2020-07-01 00:00:00Z], ~U[2020-10-01 00:00:00Z]]
+      |> Enum.map(fn instant ->
+        EtsVersioned
+        |> Ash.Query.filter(id == ^id)
+        |> Ash.Query.as_of(instant)
+        |> Ash.read!()
+        |> Enum.map(& &1.name)
+      end)
+    end
+
+    for strategy <- [:atomic, :atomic_batches, :stream] do
+      test "an update carves each record, with the #{strategy} strategy" do
+        assert %Ash.BulkResult{status: :success, records: records} =
+                 Ash.bulk_update(EtsVersioned, :update, %{name: "second"},
+                   as_of: @carve,
+                   strategy: unquote(strategy),
+                   return_records?: true,
+                   return_errors?: true
+                 )
+
+        assert [1, 2] = records |> Enum.map(& &1.id) |> Enum.sort()
+        assert Enum.all?(records, &(&1.valid_at == @carve))
+
+        for id <- [1, 2] do
+          assert [["first"], ["second"], ["first"]] = timeline(id)
+        end
+      end
+    end
+
+    test "is written record by record only on a temporal resource" do
+      assert Ash.Actions.Helpers.each_record?(EtsVersioned, as_of: @carve)
+      refute Ash.Actions.Helpers.each_record?(Ash.Test.Temporal.Thing, as_of: @carve)
+      refute Ash.Actions.Helpers.each_record?(EtsVersioned, as_of: ~U[2020-06-01 00:00:00Z])
+    end
+
+    test "a destroy removes each record over the range, and it resumes after" do
+      assert %Ash.BulkResult{status: :success} =
+               Ash.bulk_destroy(EtsVersioned, :destroy, %{},
+                 as_of: @carve,
+                 strategy: :stream,
+                 return_errors?: true
+               )
+
+      for id <- [1, 2] do
+        assert [["first"], [], ["first"]] = timeline(id)
+      end
+    end
+
+    test "a soft destroy carves each record, as an update does" do
+      assert %Ash.BulkResult{status: :success} =
+               Ash.bulk_destroy(EtsVersioned, :cancel, %{},
+                 as_of: @carve,
+                 return_errors?: true
+               )
+
+      for id <- [1, 2] do
+        assert [["first"], ["cancelled"], ["first"]] = timeline(id)
+      end
+    end
+  end
+
+  describe "a bulk write over a range, on records holding two versions" do
+    setup do
+      for id <- [1, 2] do
+        Ash.Seed.seed!(%EtsVersioned{
+          id: id,
+          name: "first",
+          valid_at: %Ash.Range{
+            lower: ~U[2020-01-01 00:00:00Z],
+            upper: ~U[2020-09-01 00:00:00Z],
+            bounds: :"[)"
+          }
+        })
+
+        Ash.Seed.seed!(%EtsVersioned{
+          id: id,
+          name: "later",
+          valid_at: %Ash.Range{lower: ~U[2020-09-01 00:00:00Z], upper: nil, bounds: :"[)"}
+        })
+      end
+
+      :ok
+    end
+
+    for strategy <- [:atomic, :atomic_batches, :stream] do
+      test "an update reaches every version the range overlaps, with the #{strategy} strategy" do
+        assert %Ash.BulkResult{status: :success} =
+                 Ash.bulk_update(EtsVersioned, :update, %{name: "second"},
+                   as_of: %Ash.Range{
+                     lower: ~U[2020-06-01 00:00:00Z],
+                     upper: ~U[2021-06-01 00:00:00Z],
+                     bounds: :"[)"
+                   },
+                   strategy: unquote(strategy),
+                   return_errors?: true
+                 )
+
+        for id <- [1, 2] do
+          assert [["first"], ["second"], ["second"]] = timeline(id)
+        end
+      end
+    end
+  end
 end
