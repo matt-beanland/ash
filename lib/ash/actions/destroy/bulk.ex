@@ -552,13 +552,13 @@ defmodule Ash.Actions.Destroy.Bulk do
                     notifications =
                       if opts[:return_notifications?] do
                         bulk_result.notifications ++
-                          List.wrap(Process.delete(:ash_notifications))
+                          Ash.Actions.Helpers.take_queued_notifications()
                       else
                         if opts[:notify?] do
                           remaining_notifications =
                             Ash.Notifier.notify(
                               bulk_result.notifications ++
-                                List.wrap(Process.delete(:ash_notifications))
+                                Ash.Actions.Helpers.take_queued_notifications()
                             )
 
                           Ash.Actions.Helpers.warn_missed!(resource, action, %{
@@ -574,11 +574,7 @@ defmodule Ash.Actions.Destroy.Bulk do
                       | notifications: notifications
                     }
                   else
-                    Process.put(
-                      :ash_notifications,
-                      List.wrap(Process.get(:ash_notifications)) ++
-                        List.wrap(bulk_result.notifications)
-                    )
+                    Ash.Actions.Helpers.queue_notifications(bulk_result.notifications)
 
                     bulk_result
                   end
@@ -1325,11 +1321,11 @@ defmodule Ash.Actions.Destroy.Bulk do
         argument =
           if is_binary(key) do
             Enum.find(action.arguments, fn arg ->
-              to_string(arg.name) == key
+              arg.public? && to_string(arg.name) == key
             end)
           else
             Enum.find(action.arguments, fn arg ->
-              arg.name == key
+              arg.public? && arg.name == key
             end)
           end
 
@@ -1366,7 +1362,7 @@ defmodule Ash.Actions.Destroy.Bulk do
   end
 
   defp authorize_bulk_query(query, atomic_changeset, opts) do
-    if opts[:authorize?] && opts[:authorize_query?] do
+    if opts[:authorize?] && opts[:authorize_query?] && Ash.Actions.Helpers.authorizers?(query) do
       case Ash.can(query, opts[:actor],
              return_forbidden_error?: true,
              pre_flight?: false,
@@ -1394,7 +1390,7 @@ defmodule Ash.Actions.Destroy.Bulk do
   end
 
   defp authorize_atomic_changeset(query, changeset, opts) do
-    if opts[:authorize?] do
+    if opts[:authorize?] && Ash.Actions.Helpers.authorizers?(changeset) do
       case Ash.can(changeset, opts[:actor],
              return_forbidden_error?: true,
              pre_flight?: false,
@@ -1712,9 +1708,8 @@ defmodule Ash.Actions.Destroy.Bulk do
         end
       after
         if notify? do
-          notifications = Process.get(:ash_notifications, [])
+          notifications = Ash.Actions.Helpers.take_queued_notifications()
           remaining_notifications = Ash.Notifier.notify(notifications)
-          Process.delete(:ash_notifications) || []
 
           Ash.Actions.Helpers.warn_missed!(resource, action, %{
             resource_notifications: remaining_notifications
@@ -1888,7 +1883,7 @@ defmodule Ash.Actions.Destroy.Bulk do
 
             notifications =
               if opts[:notify?] do
-                process_notifications = Process.get(:ash_notifications, [])
+                process_notifications = Ash.Actions.Helpers.peek_queued_notifications()
                 bulk_notifications = Process.get({:bulk_notifications, ref}) || []
 
                 if opts[:return_notifications?] do
@@ -1947,7 +1942,7 @@ defmodule Ash.Actions.Destroy.Bulk do
   end
 
   defp authorize(batch, opts) do
-    if opts[:authorize?] do
+    if opts[:authorize?] && Ash.Actions.Helpers.authorizers?(batch) do
       batch
       |> Enum.map(fn changeset ->
         if changeset.valid? do
@@ -2532,7 +2527,7 @@ defmodule Ash.Actions.Destroy.Bulk do
     else
       if notify? do
         notifications =
-          List.wrap(Process.delete(:ash_notifications)) ++
+          Ash.Actions.Helpers.take_queued_notifications() ++
             List.wrap(bulk_result.notifications)
 
         if opts[:notify?] do
@@ -2547,12 +2542,7 @@ defmodule Ash.Actions.Destroy.Bulk do
           %{bulk_result | notifications: []}
         end
       else
-        process_notifications = List.wrap(Process.get(:ash_notifications, []))
-
-        Process.put(
-          :ash_notifications,
-          process_notifications ++ List.wrap(bulk_result.notifications)
-        )
+        Ash.Actions.Helpers.queue_notifications(bulk_result.notifications)
 
         %{bulk_result | notifications: []}
       end

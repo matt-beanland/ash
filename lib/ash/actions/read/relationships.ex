@@ -408,7 +408,8 @@ defmodule Ash.Actions.Read.Relationships do
                   destination_attribute: destination_attribute
                 } = relationship
 
-                if acc != [] && source_query.context[:private][:authorize?] do
+                if acc != [] && source_query.context[:private][:authorize?] &&
+                     Ash.Actions.Helpers.authorizers?(entry_query) do
                   case Ash.can(
                          entry_query,
                          source_query.context[:private][:actor],
@@ -484,7 +485,8 @@ defmodule Ash.Actions.Read.Relationships do
                 source_query.arguments
               )
 
-            if source_query.context[:private][:authorize?] do
+            if source_query.context[:private][:authorize?] &&
+                 Ash.Actions.Helpers.authorizers?(through_query) do
               case Ash.can(
                      through_query,
                      source_query.context[:private][:actor],
@@ -1311,7 +1313,8 @@ defmodule Ash.Actions.Read.Relationships do
        ) do
     %Ash.Page.Unpaged{
       related_records: related_records,
-      opts: opts
+      opts: opts,
+      more_by_source: more_by_source
     } = unpaged
 
     attach_fun =
@@ -1327,7 +1330,8 @@ defmodule Ash.Actions.Read.Relationships do
           # just fetch the entries related to this record
           related_query =
             Ash.Query.set_context(related_query, %{
-              data_layer: %{lateral_join_source: {[record], lateral_join_source_path}}
+              data_layer: %{lateral_join_source: {[record], lateral_join_source_path}},
+              pagination_more_by_source: more_by_source
             })
 
           page =
@@ -1551,7 +1555,7 @@ defmodule Ash.Actions.Read.Relationships do
           |> Enum.filter(fn result ->
             destination_value = Map.get(result, relationship.destination_attribute)
 
-            Ash.Type.equal?(attribute.type, value, destination_value)
+            Ash.Type.equal?(attribute.type, value, destination_value, attribute.constraints)
           end)
           |> then(fn result ->
             result =
@@ -1564,7 +1568,7 @@ defmodule Ash.Actions.Read.Relationships do
           |> Enum.find_value(:error, fn result ->
             destination_value = Map.get(result, relationship.destination_attribute)
 
-            if Ash.Type.equal?(attribute.type, value, destination_value) do
+            if Ash.Type.equal?(attribute.type, value, destination_value, attribute.constraints) do
               {:ok, result}
             end
           end)

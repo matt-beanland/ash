@@ -843,6 +843,53 @@ defmodule Ash.Test.Filter.FilterTest do
         Ash.Filter.parse_input!(Profile, error: {Ash.Error.Query.NotFound, []})
       end)
     end
+
+    test "a valid nested predicate under a to-one relationship parses" do
+      assert {:ok, _} =
+               Ash.Filter.parse_input(Post, %{
+                 "author1" => %{"name" => %{"contains" => "a"}}
+               })
+
+      assert {:ok, _} =
+               Ash.Filter.parse_input(Post, %{
+                 "author1" => [%{"name" => %{"contains" => "a"}}, %{"special" => true}]
+               })
+    end
+
+    test "an unknown predicate nested under a to-one relationship returns an error" do
+      assert {:error, %Ash.Error.Query.NoSuchFilterPredicate{key: "special", resource: User}} =
+               Ash.Filter.parse_input(Post, %{
+                 "author1" => %{
+                   "name" => %{"contains" => "a", "special" => %{"eq" => true}}
+                 }
+               })
+
+      query =
+        Ash.Query.filter_input(Post, %{
+          "author1" => %{"name" => %{"contains" => "a", "special" => %{"eq" => true}}}
+        })
+
+      refute query.valid?
+      assert [%Ash.Error.Query.NoSuchFilterPredicate{key: "special"}] = query.errors
+    end
+
+    test "an invalid predicate value under a to-one relationship returns an error" do
+      assert {:error, %Ash.Error.Query.InvalidFilterValue{}} =
+               Ash.Filter.parse_input(Post, %{"author1" => %{"name" => %{"in" => "x"}}})
+
+      assert {:error, %Ash.Error.Query.InvalidFilterValue{}} =
+               Ash.Filter.parse_input(Post, %{"author1" => %{"name" => %{"is_nil" => "yes"}}})
+    end
+
+    test "a list of bare values under a to-one relationship returns the same error as a to-many" do
+      assert {:error, %Ash.Error.Query.InvalidFilterValue{} = to_one} =
+               Ash.Filter.parse_input(Post, %{"author1" => ["x"]})
+
+      assert {:error, %Ash.Error.Query.InvalidFilterValue{} = to_many} =
+               Ash.Filter.parse_input(User, %{"posts" => ["x"]})
+
+      assert to_one.value == to_many.value
+    end
   end
 
   describe "base_filter" do
@@ -1377,6 +1424,93 @@ defmodule Ash.Test.Filter.FilterTest do
              |> Ash.Query.filter(is_not_distinct_from("jpg", "jpg"))
              |> inspect() =~
                ~S(filter: #Ash.Filter<true>)
+    end
+  end
+
+  defmodule NoJoinDataLayer do
+    @moduledoc false
+    use Spark.Dsl.Extension, sections: []
+
+    @behaviour Ash.DataLayer
+
+    @impl true
+    def can?(_, {:join, _}), do: false
+    def can?(_, {:filter_relationship, _}), do: true
+    def can?(_, {:filter_expr, _}), do: true
+    def can?(_, :filter), do: true
+    def can?(_, :boolean_filter), do: true
+    def can?(_, :expression_calculation), do: true
+    def can?(_, :nested_expressions), do: true
+    def can?(_, :read), do: true
+    def can?(_, _), do: false
+
+    @impl true
+    def resource_to_query(resource, _), do: %{resource: resource}
+
+    @impl true
+    def run_query(_, _), do: {:ok, []}
+  end
+
+  defmodule NoJoinAuthor do
+    @moduledoc false
+    use Ash.Resource, domain: Domain, data_layer: NoJoinDataLayer
+
+    attributes do
+      uuid_primary_key :id
+      attribute :name, :string, public?: true
+    end
+
+    actions do
+      defaults [:read]
+    end
+  end
+
+  defmodule NoJoinComment do
+    @moduledoc false
+    use Ash.Resource, domain: Domain, data_layer: NoJoinDataLayer
+
+    attributes do
+      uuid_primary_key :id
+      attribute :title, :string, public?: true
+      attribute :body, :string, public?: true
+      attribute :post_id, :uuid, public?: true
+    end
+
+    actions do
+      defaults [:read]
+    end
+  end
+
+  defmodule NoJoinPost do
+    @moduledoc false
+    use Ash.Resource, domain: Domain, data_layer: NoJoinDataLayer
+
+    attributes do
+      uuid_primary_key :id
+      attribute :title, :string, public?: true
+    end
+
+    actions do
+      defaults [:read]
+    end
+
+    relationships do
+      belongs_to :author, NoJoinAuthor, public?: true
+      has_many :comments, NoJoinComment, destination_attribute: :post_id, public?: true
+    end
+  end
+
+  describe "data layers that cannot join" do
+    test "one ref through a relationship is allowed" do
+      assert %{valid?: true} = Ash.Query.filter(NoJoinPost, comments.title == "foo")
+    end
+
+    test "two refs through the same relationship are allowed" do
+      assert %{valid?: true} = Ash.Query.filter(NoJoinPost, comments.title == comments.body)
+    end
+
+    test "refs through two different relationships are still rejected" do
+      assert %{valid?: false} = Ash.Query.filter(NoJoinPost, comments.title == author.name)
     end
   end
 end

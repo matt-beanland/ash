@@ -479,6 +479,11 @@ defmodule Ash.Type.NewType do
       end
 
       @impl Ash.Type
+      def equal?(left, right, constraints) do
+        unquote(subtype_of).equal?(left, right, subtype_constraints(constraints))
+      end
+
+      @impl Ash.Type
       def generator(constraints) do
         Ash.Type.generator(unquote(subtype_of), constraints)
       end
@@ -711,7 +716,8 @@ defmodule Ash.Type.NewType do
         end
       end
 
-      defoverridable apply_constraints_array: 2,
+      defoverridable init: 1,
+                     apply_constraints_array: 2,
                      apply_constraints: 2,
                      apply_atomic_constraints: 2,
                      apply_atomic_constraints_array: 2,

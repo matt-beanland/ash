@@ -66,6 +66,9 @@ defmodule Ash.Test.CodeInterfaceTest do
     code_interface do
       define :get_user, action: :read, get_by: :id
       define :get_user_safely, action: :read, get_by: :id, not_found_error?: false
+      define :get_user_by_first_name, action: :read, get_by: :first_name
+      define :update_user_by_id, action: :update, get_by: :id, get?: true
+      define :destroy_user_by_id, action: :destroy, get_by: :id
       define :read_users, action: :read
       define :get_by_id, action: :by_id, get?: true, args: [:id]
       define :update_by_id, action: :update_by_id_without_filter, get?: true, args: [:id]
@@ -474,6 +477,28 @@ defmodule Ash.Test.CodeInterfaceTest do
                User.read_users!(query: [sort: [first_name: :desc]], authorize?: false)
     end
 
+    test "results can be streamed" do
+      User.create!("bob")
+      User.create!("cob")
+
+      assert [%{first_name: "bob"}, %{first_name: "cob"}] =
+               User.read_users!(
+                 query: [sort: [first_name: :asc]],
+                 authorize?: false,
+                 stream?: true
+               )
+               |> Enum.to_list()
+
+      assert [%{first_name: "bob"}, %{first_name: "cob"}] =
+               User.read_users!(
+                 query: [sort: [first_name: :asc]],
+                 authorize?: false,
+                 stream?: true,
+                 stream_options: [batch_size: 1]
+               )
+               |> Enum.to_list()
+    end
+
     test "have a helper to test authorization" do
       assert {:ok, true} == User.can_read_users(nil)
       assert {:ok, true} == User.can_get_by_id(nil, "some uuid")
@@ -537,6 +562,62 @@ defmodule Ash.Test.CodeInterfaceTest do
 
       assert nil ==
                User.get_user!(Ash.UUID.generate(), not_found_error?: false, context: @context)
+    end
+  end
+
+  describe "get_by casting" do
+    test "invalid values for get_by error like action arguments do" do
+      assert_raise Ash.Error.Invalid, ~r/Invalid value provided for id: is invalid/, fn ->
+        User.get_user!("not a uuid")
+      end
+
+      assert_raise Ash.Error.Invalid, ~r/Invalid value provided for id: is invalid/, fn ->
+        Domain.get_user!("not a uuid")
+      end
+    end
+
+    test "invalid values for get_by return `InvalidArgument` errors, not `InvalidFilterValue`" do
+      assert {:error, %Ash.Error.Invalid{errors: [error]}} = User.get_user("not a uuid")
+      assert %Ash.Error.Query.InvalidArgument{} = error
+      assert error.field == :id
+      assert error.value == "not a uuid"
+      assert error.message == "is invalid"
+    end
+
+    test "valid values for get_by still match records" do
+      user = User.create!("fred", context: @context)
+
+      assert User.get_user!(user.id).id == user.id
+      assert {:ok, %{id: id}} = User.get_user(user.id)
+      assert id == user.id
+    end
+
+    test "values castable to the field type still work" do
+      User.create!("fred", context: @context)
+      assert %User{first_name: "fred"} = User.get_user_by_first_name!("fred")
+    end
+
+    test "update interfaces with get_by cast values" do
+      user = User.create!("fred", context: @context)
+
+      assert {:error, %Ash.Error.Invalid{errors: [%Ash.Error.Query.InvalidArgument{} = error]}} =
+               User.update_user_by_id("not a uuid", %{first_name: "bob_updated"})
+
+      assert error.field == :id
+
+      assert %User{first_name: "bob_updated"} =
+               User.update_user_by_id!(user.id, %{first_name: "bob_updated"})
+    end
+
+    test "destroy interfaces with get_by cast values" do
+      user = User.create!("fred", context: @context)
+
+      assert {:error, %Ash.Error.Invalid{errors: [%Ash.Error.Query.InvalidArgument{} = error]}} =
+               User.destroy_user_by_id("not a uuid")
+
+      assert error.field == :id
+
+      assert :ok = User.destroy_user_by_id!(user.id)
     end
   end
 

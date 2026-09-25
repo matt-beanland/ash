@@ -169,6 +169,8 @@ defmodule Ash.EmbeddableType do
 
       def storage_type(_), do: :map
 
+      def acts_as(_), do: :map
+
       def cast_atomic(value, constraints) do
         with :ok <- check_atomic(value, constraints) do
           case cast_input(value, constraints) do
@@ -288,10 +290,34 @@ defmodule Ash.EmbeddableType do
                         {:cont, {:ok, index, Map.put(acc, attribute.name, casted)}}
                       else
                         {:error, error} ->
-                          error =
-                            Ash.Error.set_path(Ash.Error.to_ash_error(error), attribute.name)
+                          errors =
+                            error
+                            |> Ash.Helpers.flatten_preserving_keywords()
+                            |> Enum.flat_map(fn
+                              error when is_exception(error) ->
+                                [
+                                  Ash.Error.set_path(
+                                    Ash.Error.to_ash_error(error),
+                                    attribute.name
+                                  )
+                                ]
 
-                          {:halt, {:error, index, error}}
+                              message ->
+                                # Match changeset casting while retaining nested field/path metadata.
+                                message
+                                |> Ash.Type.Helpers.error_to_exception_opts(attribute)
+                                |> Enum.map(fn opts ->
+                                  Ash.Error.Changes.InvalidAttribute.exception(
+                                    value: value,
+                                    field: opts[:field],
+                                    message: opts[:message],
+                                    vars: opts
+                                  )
+                                  |> Ash.Error.set_path(opts[:path] || [])
+                                end)
+                            end)
+
+                          {:halt, {:error, index, errors}}
                       end
                     else
                       if Enum.any?(skip_unknown_inputs, &(&1 == :* || &1 == key)) do
@@ -997,9 +1023,19 @@ defmodule Ash.EmbeddableType do
 
                       if unique_key_config.nils_distinct? do
                         not is_nil(this_value) and not is_nil(other_value) and
-                          Ash.Type.equal?(attribute.type, this_value, other_value)
+                          Ash.Type.equal?(
+                            attribute.type,
+                            this_value,
+                            other_value,
+                            attribute.constraints
+                          )
                       else
-                        Ash.Type.equal?(attribute.type, this_value, other_value)
+                        Ash.Type.equal?(
+                          attribute.type,
+                          this_value,
+                          other_value,
+                          attribute.constraints
+                        )
                       end
                     end)
                   end)

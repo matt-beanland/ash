@@ -202,7 +202,7 @@ defmodule Ash do
                  ]
                ]
                |> Spark.Options.merge(
-                 Keyword.drop(@read_opts_schema, [:page]),
+                 Keyword.drop(@read_opts_schema, [:page, :return_query?]),
                  "Read Options"
                )
 
@@ -2485,9 +2485,19 @@ defmodule Ash do
       {:ok, result}
     else
       {:error, error} ->
-        {:error, Ash.Error.to_error_class(error)}
+        {:error, Ash.Error.to_error_class(invalid_page_error(error, opts))}
     end
   end
+
+  # The `:page` option is validated by `Ash.Page.page_opts/1`, the same function
+  # `Ash.Query.page/2` uses, but here a failure arrives as an options validation
+  # error that `Ash.Error.to_error_class/2` has no class for. Page options are
+  # user input, so they get the invalid-class error the query path already returns.
+  defp invalid_page_error(%Spark.Options.ValidationError{key: :page}, opts) do
+    Ash.Error.Query.InvalidPage.exception(page: opts[:page])
+  end
+
+  defp invalid_page_error(error, _opts), do: error
 
   defp do_get(resource, filter, domain, opts, action, read_opts) do
     query =
@@ -3037,13 +3047,24 @@ defmodule Ash do
           run: (Ash.DataLayer.data_layer_query() ->
                   {:ok, list(Ash.Resource.Record.t()) | Ash.Page.page() | no_return}
                   | {:error, Ash.Error.t()}),
-          load: (list(Ash.Resource.Record.t()) | Ash.Page.page() ->
+          load: (Ash.Query.t(), list(Ash.Resource.Record.t()) | Ash.Page.page() ->
                    {:ok, list(Ash.Resource.Record.t()) | Ash.Page.page()}
                    | {:error, Ash.Error.t()})
         }
 
   @doc """
   Gets the full query and any runtime calculations that would be loaded
+
+  ## Pagination
+
+  When the query is paginated, `run` returns an `Ash.Page.Offset` or
+  `Ash.Page.Keyset` rather than a list, otherwise a list of records.
+
+  Pass whatever `run` returned to `load`, which loads relationships,
+  calculations and load-through attributes on the records and returns the same
+  shape it was given. `load` also accepts the raw rows of a data layer query
+  you executed yourself and builds the page from them. Passing `page.results`
+  instead of the page loses `more?`.
 
   ## Examples
 
@@ -3192,7 +3213,7 @@ defmodule Ash do
       end
     else
       {:error, error} ->
-        {:error, Ash.Error.to_error_class(error)}
+        {:error, Ash.Error.to_error_class(invalid_page_error(error, opts))}
     end
   end
 
@@ -3341,7 +3362,7 @@ defmodule Ash do
       end
     else
       {:error, error} ->
-        {:error, Ash.Error.to_error_class(error)}
+        {:error, Ash.Error.to_error_class(invalid_page_error(error, opts))}
     end
   end
 
@@ -3421,7 +3442,7 @@ defmodule Ash do
       end
     else
       {:error, error} ->
-        {:error, Ash.Error.to_error_class(error)}
+        {:error, Ash.Error.to_error_class(invalid_page_error(error, opts))}
     end
   end
 
@@ -4423,12 +4444,12 @@ defmodule Ash do
                %{type: :custom, metadata: %{}, tenant: opts[:tenant]}
              ) do
         if opts[:return_notifications?] do
-          notifications = Process.delete(:ash_notifications) || []
+          notifications = Ash.Actions.Helpers.take_queued_notifications()
 
           {:ok, result, notifications}
         else
           if notify? do
-            notifications = Process.delete(:ash_notifications) || []
+            notifications = Ash.Actions.Helpers.take_queued_notifications()
 
             remaining = Ash.Notifier.notify(notifications)
 
@@ -4458,9 +4479,9 @@ defmodule Ash do
       end
 
       if old_notifications do
-        notifications = Process.get(:ash_notifications) || []
-
-        Process.put(:ash_notifications, old_notifications ++ notifications)
+        inner_notifications = Process.delete(:ash_notifications)
+        Process.put(:ash_notifications, old_notifications)
+        Ash.Actions.Helpers.queue_notifications(inner_notifications)
       end
     end
   end
@@ -4527,12 +4548,12 @@ defmodule Ash do
                rollback_on_error?: true
              ) do
         if opts[:return_notifications?] do
-          notifications = Process.delete(:ash_notifications) || []
+          notifications = Ash.Actions.Helpers.take_queued_notifications()
 
           {:ok, result, notifications}
         else
           if notify? do
-            notifications = Process.delete(:ash_notifications) || []
+            notifications = Ash.Actions.Helpers.take_queued_notifications()
 
             remaining = Ash.Notifier.notify(notifications)
 
@@ -4562,9 +4583,11 @@ defmodule Ash do
       end
 
       if old_notifications do
-        notifications = Process.get(:ash_notifications) || []
-
-        Process.put(:ash_notifications, old_notifications ++ notifications)
+        # Restore the outer queue, then append anything queued inside this
+        # transaction so ordering is preserved.
+        inner_notifications = Process.delete(:ash_notifications)
+        Process.put(:ash_notifications, old_notifications)
+        Ash.Actions.Helpers.queue_notifications(inner_notifications)
       end
     end
   end

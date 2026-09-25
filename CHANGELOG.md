@@ -8,6 +8,131 @@ SPDX-License-Identifier: MIT
 
 <!-- changelog -->
 
+## [v3.33.11](https://github.com/ash-project/ash/compare/v3.33.10...v3.33.11) (2026-09-25)
+
+
+
+
+### Bug Fixes:
+
+* enforce public? on argument matching in bulk destroy/update (CVE-2026-93477) by [@zachdaniel](https://github.com/zachdaniel)
+
+* properly compare unions w/ `Ash.Type.equal?` by [@zachdaniel](https://github.com/zachdaniel)
+
+## [v3.33.10](https://github.com/ash-project/ash/compare/v3.33.9...v3.33.10) (2026-09-24)
+
+
+
+
+### Bug Fixes:
+
+* clamp page limit to max page size by [@zachdaniel](https://github.com/zachdaniel)
+
+* return an invalid error for bad page options passed to read functions (#2963) by grempe [(#2963)](https://github.com/ash-project/ash/pull/2963)
+
+* preserve field paths and messages in embedded array errors (#2946) by Alt-iOS [(#2946)](https://github.com/ash-project/ash/pull/2946)
+
+* pass through `{:not_atomic, _}` from where conditions and verify them at compile time by [@zachdaniel](https://github.com/zachdaniel)
+
+## [v3.33.9](https://github.com/ash-project/ash/compare/v3.33.8...v3.33.9) (2026-09-21)
+
+
+
+
+### Bug Fixes:
+
+* reinstate lazy calculations fix by [@zachdaniel](https://github.com/zachdaniel)
+
+* ensure actor and tenant context is available to changes on soft destroys (#2958) by aVikingTrex [(#2958)](https://github.com/ash-project/ash/pull/2958)
+
+## [v3.33.8](https://github.com/ash-project/ash/compare/v3.33.7...v3.33.8) (2026-09-21)
+
+
+### Bug Fixes:
+
+* revert: properly prevent reloading lazy calculations by [@zachdaniel](https://github.com/zachdaniel)
+
+This caused calculations with arguments to not be reloaded
+
+
+## [v3.33.7](https://github.com/ash-project/ash/compare/v3.33.6...v3.33.7) (2026-09-21)
+
+
+
+
+### Bug Fixes:
+
+* properly prevent reloading lazy calculations by [@zachdaniel](https://github.com/zachdaniel)
+
+* handle parsing errors for relationship filters by [@zachdaniel](https://github.com/zachdaniel)
+
+### Performance Improvements:
+
+* store static policy expressions at compile time by [@zachdaniel](https://github.com/zachdaniel)
+
+* constant fold policy expressions before other expensive logic by [@zachdaniel](https://github.com/zachdaniel)
+
+* don't run authorization code if there are no authorizers by [@zachdaniel](https://github.com/zachdaniel)
+
+## [v3.33.6](https://github.com/ash-project/ash/compare/v3.33.5...v3.33.6) (2026-09-18)
+
+
+
+
+### Improvements:
+
+* allow overriding `init/1` by [@zachdaniel](https://github.com/zachdaniel)
+
+* check expression arguments against declared function argument types (#2948) by [@zachdaniel](https://github.com/zachdaniel)
+
+### Bug Fixes:
+
+* validate malformed boolean filter groups (#2951) by Wu Shuwen [(#2951)](https://github.com/ash-project/ash/pull/2951)
+
+* resolve aggregate types in manifest reachability (#2950) by [@pshoukry](https://github.com/pshoukry) [(#2950)](https://github.com/ash-project/ash/pull/2950)
+
+## [v3.33.5](https://github.com/ash-project/ash/compare/v3.33.4...v3.33.5) (2026-09-17)
+
+
+
+
+### Improvements:
+
+* use O(1) event listener lookup by [@zachdaniel](https://github.com/zachdaniel)
+
+### Bug Fixes:
+
+* return an invalid error for sort input that is not a string or list (#2947) by [@chiliec](https://github.com/chiliec) [(#2947)](https://github.com/ash-project/ash/pull/2947)
+
+* don't pass `return_query?` and `stream?` in code interface opts by [@zachdaniel](https://github.com/zachdaniel)
+
+* handle notifications w/o an action set by [@zachdaniel](https://github.com/zachdaniel)
+
+## [v3.33.4](https://github.com/ash-project/ash/compare/v3.33.3...v3.33.4) (2026-09-15)
+
+
+
+
+### Bug Fixes:
+
+* apply field policies to calculations and aggregates referenced in filters (CVE-2026-86338) by [@zachdaniel](https://github.com/zachdaniel)
+
+* use nested lists for notification optimization by [@zachdaniel](https://github.com/zachdaniel)
+
+* don't write empty lists to pdict for no reason by [@zachdaniel](https://github.com/zachdaniel)
+
+* don't pass the extra pagination row to read hooks (#2916) by [@barnabasJ](https://github.com/barnabasJ) [(#2916)](https://github.com/ash-project/ash/pull/2916)
+
+* reject the unsupported `return_query?` option in `Ash.stream!/2` (#2934) by [@jimsynz](https://github.com/jimsynz) [(#2934)](https://github.com/ash-project/ash/pull/2934)
+
+* don't ask whether a resource can join itself (#2931) by jeroen11dijk [(#2931)](https://github.com/ash-project/ash/pull/2931)
+
+* unwrap map-form notifications from a non-bulk manual action result (#2930) by [@Torkan](https://github.com/Torkan) [(#2930)](https://github.com/ash-project/ash/pull/2930)
+
+* don't drop notifications returned as a list from manual destroy actions (#2929) by [@Torkan](https://github.com/Torkan) [(#2929)](https://github.com/ash-project/ash/pull/2929)
+
+* setting undeclared argument was done with `nil` key (#2925) by Rutgerdj [(#2925)](https://github.com/ash-project/ash/pull/2925)
+
 ## [v3.33.3](https://github.com/ash-project/ash/compare/v3.33.2...v3.33.3) (2026-09-10)
 
 

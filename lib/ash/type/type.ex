@@ -378,6 +378,37 @@ defmodule Ash.Type do
   @doc "Whether or not data layers that build queries should attempt to type cast values of this type while doing so."
   @callback cast_in_query?(constraints) :: boolean
 
+  @doc """
+  A type that this type may stand in for when matching the declared argument
+  types of expression functions.
+
+  For example, `contains/2` declares its first argument as `:string`. An
+  `:atom` attribute is accepted there because `Ash.Type.Atom` acts as
+  `:string`, and an `Ash.Type.Enum` is accepted because it acts as `:atom`,
+  which in turn acts as `:string`. Return `nil` (the default) if the type
+  stands in for nothing else.
+  """
+  @callback acts_as(constraints) :: t() | nil
+
+  @doc """
+  The type this type is parameterized by, read from its constraints.
+
+  Arrays are the built-in parameterized type: `{:array, :integer}` is an
+  array *of* integers. A type module may be parameterized the same way, with
+  the parameter carried in its constraints; `Ash.Type.Range` is a range *of*
+  its `inner_type`. Expression function signatures use this to say
+  `{:range, :same}` just as they say `{:array, :same}`.
+
+  Return `nil` (the default) if the type is not parameterized, or if the
+  parameter cannot be read from the given constraints.
+  """
+  @callback type_parameter(constraints) :: {t(), constraints} | nil
+
+  @doc """
+  Writes a type parameter back into the constraints. See `c:type_parameter/1`.
+  """
+  @callback with_type_parameter(constraints, {t(), constraints}) :: constraints
+
   @doc "The underlying Ecto.Type."
   @callback ecto_type() :: Ecto.Type.t()
 
@@ -580,6 +611,17 @@ defmodule Ash.Type do
   *Do not define this* if `==` is sufficient for your type. See `c:simple_equality?/0` for more.
   """
   @callback equal?(term, term) :: boolean
+
+  @doc """
+  Determine if two valid instances of the type are equal, given the type's constraints.
+
+  Defaults to calling `c:equal?/2`. Define this instead of `c:equal?/2` if your type
+  needs its constraints to compare values, for example to compare nested values
+  using the types described by those constraints.
+
+  *Do not define this* if `==` is sufficient for your type. See `c:simple_equality?/0` for more.
+  """
+  @callback equal?(term, term, constraints) :: boolean
 
   @doc """
   Whether or not `==` can be used to compare instances of the type.
@@ -1431,6 +1473,67 @@ defmodule Ash.Type do
     type.constraints()
   end
 
+  @doc """
+  The type that the given type acts as in expressions, if any.
+
+  See `c:acts_as/1`.
+  """
+  @spec acts_as(t(), constraints()) :: t() | nil
+  def acts_as(type, constraints \\ [])
+
+  def acts_as({:array, type}, constraints) do
+    case acts_as(type, item_constraints(constraints)) do
+      nil -> nil
+      type -> {:array, type}
+    end
+  end
+
+  def acts_as(type, constraints) do
+    type = get_type(type)
+
+    if ash_type?(type) && function_exported?(type, :acts_as, 1) do
+      type.acts_as(constraints)
+    end
+  end
+
+  @doc """
+  The type parameter of a parameterized type, or `nil`.
+
+  Arrays are handled here; other types answer through `c:type_parameter/1`.
+  """
+  @spec type_parameter(t(), constraints()) :: {t(), constraints()} | nil
+  def type_parameter(type, constraints \\ [])
+
+  def type_parameter({:array, type}, constraints) do
+    {get_type(type), constraints[:items] || []}
+  end
+
+  def type_parameter(type, constraints) do
+    type = get_type(type)
+
+    if ash_type?(type) && function_exported?(type, :type_parameter, 1) do
+      type.type_parameter(constraints)
+    end
+  end
+
+  @doc """
+  Builds a parameterized type from its constructor and a parameter, returning
+  `{type, constraints}`. The inverse of `type_parameter/2`.
+
+      iex> Ash.Type.with_type_parameter(:array, [], {:integer, []})
+      {{:array, Ash.Type.Integer}, [items: []]}
+  """
+  @spec with_type_parameter(t() | :array, constraints(), {t(), constraints()}) ::
+          {t(), constraints()}
+  def with_type_parameter(:array, constraints, {type, parameter_constraints}) do
+    {{:array, get_type(type)}, Keyword.put(constraints, :items, parameter_constraints)}
+  end
+
+  def with_type_parameter(type, constraints, parameter) do
+    type = get_type(type)
+    {type, type.with_type_parameter(constraints, parameter)}
+  end
+
   @doc "Returns `true` if the type should be cast in underlying queries"
   def cast_in_query?(type, constraints \\ [])
 
@@ -1604,17 +1707,22 @@ defmodule Ash.Type do
 
   Maps to `Ecto.Type.equal?/3`
   """
-  @spec equal?(t(), term, term) :: boolean
-  def equal?({:array, type}, [nil | xs], [nil | ys]), do: equal?({:array, type}, xs, ys)
+  @spec equal?(t(), term, term, constraints()) :: boolean
+  def equal?(type, left, right, constraints \\ [])
 
-  def equal?({:array, type}, [x | xs], [y | ys]),
-    do: equal?(type, x, y) && equal?({:array, type}, xs, ys)
+  def equal?({:array, type}, [nil | xs], [nil | ys], constraints),
+    do: equal?({:array, type}, xs, ys, constraints)
 
-  def equal?({:array, _}, [], []), do: true
-  def equal?({:array, _}, _, _), do: false
+  def equal?({:array, type}, [x | xs], [y | ys], constraints),
+    do:
+      equal?(type, x, y, constraints[:items] || []) &&
+        equal?({:array, type}, xs, ys, constraints)
 
-  def equal?(type, left, right) do
-    type.equal?(left, right)
+  def equal?({:array, _}, [], [], _), do: true
+  def equal?({:array, _}, _, _, _), do: false
+
+  def equal?(type, left, right, constraints) do
+    get_type(type).equal?(left, right, constraints)
   end
 
   @doc """
@@ -2014,8 +2122,8 @@ defmodule Ash.Type do
         end
 
         @impl true
-        def equal?(left, right, _params) do
-          @parent.equal?(left, right)
+        def equal?(left, right, params) do
+          @parent.equal?(left, right, params)
         end
 
         @impl true
@@ -2053,6 +2161,15 @@ defmodule Ash.Type do
 
       @impl true
       def cast_in_query?(_), do: true
+
+      @impl true
+      def acts_as(_constraints), do: nil
+
+      @impl true
+      def type_parameter(_constraints), do: nil
+
+      @impl true
+      def with_type_parameter(constraints, _parameter), do: constraints
 
       @impl true
       def composite?(_constraints), do: false
@@ -2358,7 +2475,10 @@ defmodule Ash.Type do
                      loaded?: 4,
                      composite?: 1,
                      composite_types: 1,
-                     cast_in_query?: 1
+                     cast_in_query?: 1,
+                     acts_as: 1,
+                     type_parameter: 1,
+                     with_type_parameter: 2
     end
   end
 
@@ -2705,7 +2825,8 @@ defmodule Ash.Type do
   # Credit to @immutable from elixir discord for the idea
   defmacro __before_compile__(_env) do
     quote generated: true do
-      if Module.defines?(__MODULE__, {:equal?, 2}, :def) do
+      if Module.defines?(__MODULE__, {:equal?, 2}, :def) ||
+           Module.defines?(__MODULE__, {:equal?, 3}, :def) do
         if !Module.defines?(__MODULE__, {:simple_equality, 0}, :def) do
           @impl true
           def simple_equality?, do: false
@@ -2715,9 +2836,27 @@ defmodule Ash.Type do
           @impl true
           def simple_equality?, do: true
         end
+      end
 
-        @impl true
-        def equal?(left, right), do: left == right
+      cond do
+        Module.defines?(__MODULE__, {:equal?, 2}, :def) &&
+            Module.defines?(__MODULE__, {:equal?, 3}, :def) ->
+          :ok
+
+        Module.defines?(__MODULE__, {:equal?, 2}, :def) ->
+          @impl true
+          def equal?(left, right, _constraints), do: equal?(left, right)
+
+        Module.defines?(__MODULE__, {:equal?, 3}, :def) ->
+          @impl true
+          def equal?(left, right), do: equal?(left, right, [])
+
+        true ->
+          @impl true
+          def equal?(left, right), do: left == right
+
+          @impl true
+          def equal?(left, right, _constraints), do: left == right
       end
 
       if Module.defines?(__MODULE__, {:to_simple_equality_comparable, 1}, :def) do

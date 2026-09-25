@@ -489,6 +489,10 @@ defmodule Ash.Policy.Authorizer do
     Ash.Policy.Authorizer.Transformers.CacheFieldPolicies
   ]
 
+  @persisters [
+    Ash.Policy.Authorizer.Transformers.CachePolicyExpressions
+  ]
+
   @verifiers [
     Ash.Policy.Authorizer.Verifiers.VerifyInAuthorizers,
     Ash.Policy.Authorizer.Verifiers.VerifySatSolverImplementation,
@@ -499,6 +503,7 @@ defmodule Ash.Policy.Authorizer do
   use Spark.Dsl.Extension,
     sections: @sections,
     transformers: @transformers,
+    persisters: @persisters,
     verifiers: @verifiers
 
   @impl true
@@ -1116,9 +1121,44 @@ defmodule Ash.Policy.Authorizer do
            attribute: %struct{name: name},
            relationship_path: relationship_path
          } = ref,
-         %{stack: [{parent, _path, action, domain} | _]} = acc
+         acc
        )
        when struct in [Ash.Resource.Attribute, Ash.Resource.Aggregate, Ash.Resource.Calculation] do
+    replace_named_ref(name, relationship_path, ref, acc)
+  end
+
+  defp do_replace_ref(
+         %{
+           attribute: %Ash.Query.Calculation{calc_name: name},
+           relationship_path: relationship_path
+         } = ref,
+         acc
+       )
+       when is_atom(name) and not is_nil(name) do
+    replace_named_ref(name, relationship_path, ref, acc)
+  end
+
+  defp do_replace_ref(
+         %{
+           attribute: %Ash.Query.Aggregate{agg_name: name},
+           relationship_path: relationship_path
+         } = ref,
+         acc
+       )
+       when is_atom(name) and not is_nil(name) do
+    replace_named_ref(name, relationship_path, ref, acc)
+  end
+
+  defp do_replace_ref(ref, acc) do
+    {ref, acc}
+  end
+
+  defp replace_named_ref(
+         name,
+         relationship_path,
+         ref,
+         %{stack: [{parent, _path, action, domain} | _]} = acc
+       ) do
     resource = Ash.Resource.Info.related(parent, relationship_path)
 
     action =
@@ -1140,10 +1180,6 @@ defmodule Ash.Policy.Authorizer do
       end
 
     expression_for_ref(resource, name, action, domain, ref, acc)
-  end
-
-  defp do_replace_ref(ref, acc) do
-    {ref, acc}
   end
 
   defp related_with_action(resource, path) do

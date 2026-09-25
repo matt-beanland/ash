@@ -10,7 +10,7 @@ defmodule Ash.MixProject do
   A declarative, extensible framework for building Elixir applications.
   """
 
-  @version "3.33.3"
+  @version "3.33.11"
 
   def project do
     [
@@ -366,7 +366,7 @@ defmodule Ash.MixProject do
         "Changelog" => "https://github.com/ash-project/ash/blob/main/CHANGELOG.md",
         "Discord" => "https://discord.gg/HTHRaaVPUc",
         "Website" => "https://ash-hq.org",
-        "Forum" => "https://elixirforum.com/c/elixir-framework-forums/ash-framework-forum",
+        "Forum" => "https://elixirforum.com/ash",
         "REUSE Compliance" => "https://api.reuse.software/info/github.com/ash-project/ash"
       }
     ]
