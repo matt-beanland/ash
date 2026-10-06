@@ -5,7 +5,11 @@
 defmodule Ash.Error.Changes.InvalidAsOf do
   @moduledoc "Used when a write is given an `as_of` that does not make a valid period"
 
-  use Splode.Error, fields: [:resource, :as_of, :message], class: :invalid
+  use Splode.Error, fields: [:resource, :as_of, :message, implied?: false], class: :invalid
+
+  def message(%{implied?: true} = error) do
+    "Cannot write #{inspect(error.resource)} now, the default when no `as_of` is given: #{error.message}"
+  end
 
   def message(error) do
     "Cannot write #{inspect(error.resource)} as of #{inspect(error.as_of)}: #{error.message}"

@@ -4375,7 +4375,9 @@ defmodule Ash do
         :ok
 
       as_of ->
-        case Ash.Temporal.check_write_as_of(changeset.resource, as_of) do
+        case Ash.Temporal.check_write_as_of(changeset.resource, as_of,
+               action_type: changeset.action_type
+             ) do
           {:ok, cast} when cast == changeset.as_of ->
             :ok
 

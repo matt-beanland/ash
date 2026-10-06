@@ -6,13 +6,14 @@ defmodule Ash.DataLayer.EtsTemporalTest do
   @moduledoc false
   use ExUnit.Case, async: false
 
-  alias Ash.Test.Temporal.{EtsVersioned, Precise}
+  alias Ash.Test.Temporal.{EtsVersioned, Limited, Precise}
 
   require Ash.Query
 
   setup do
     on_exit(fn ->
       Ash.DataLayer.Ets.stop(EtsVersioned)
+      Ash.DataLayer.Ets.stop(Limited)
       Ash.DataLayer.Ets.stop(Precise)
     end)
   end
@@ -582,6 +583,73 @@ defmodule Ash.DataLayer.EtsTemporalTest do
                |> Ash.Changeset.for_create(:create, %{id: 2, name: "bad"})
                |> Ash.Changeset.as_of("banana")
                |> Ash.create()
+    end
+  end
+
+  @fy %Ash.Range{
+    lower: ~U[2025-07-01 00:00:00Z],
+    upper: ~U[2026-07-01 00:00:00Z],
+    bounds: :"[)"
+  }
+
+  defp create_limited(id, opts) do
+    Limited
+    |> Ash.Changeset.for_create(:create, %{id: id, name: "x"}, opts)
+    |> Ash.create()
+  end
+
+  describe "a create as of an instant, against a period's limits" do
+    test "within the limits is refused, since its period has no end" do
+      assert {:error, %Ash.Error.Invalid{} = error} =
+               create_limited(1, as_of: ~U[2025-10-01 00:00:00Z])
+
+      assert Exception.message(error) =~ "write over a range ending at `:end`"
+    end
+
+    test "before the lower limit is refused" do
+      assert {:error, %Ash.Error.Invalid{} = error} =
+               create_limited(1, as_of: ~U[2025-06-30 00:00:00Z])
+
+      assert Exception.message(error) =~ "the period starts at"
+    end
+  end
+
+  test "a create over a range ending at :end ends at the period's upper limit" do
+    assert {:ok, %{valid_at: %Ash.Range{upper: ~U[2026-07-01 00:00:00Z]}}} =
+             create_limited(1, as_of: %Ash.Range{lower: ~U[2025-10-01 00:00:00Z], upper: :end})
+  end
+
+  test "a create given no as_of, beyond a period's limits, is refused as of the implied now" do
+    assert {:error, %Ash.Error.Invalid{} = error} = create_limited(1, [])
+
+    assert Exception.message(error) =~ "now, the default when no `as_of` is given"
+  end
+
+  describe "an update as of an instant, against a period's limits" do
+    setup do
+      %{record: Ash.Seed.seed!(%Limited{id: 1, name: "first", valid_at: @fy})}
+    end
+
+    test "within the limits splits the version it falls in", %{record: record} do
+      assert {:ok, _} = Ash.update(record, %{name: "second"}, as_of: ~U[2026-01-01 00:00:00Z])
+
+      assert Ash.get!(Limited, 1, as_of: ~U[2025-12-01 00:00:00Z]).name == "first"
+      assert Ash.get!(Limited, 1, as_of: ~U[2026-02-01 00:00:00Z]).name == "second"
+    end
+
+    test "at or after the upper limit is refused", %{record: record} do
+      assert {:error, %Ash.Error.Invalid{} = error} =
+               Ash.update(record, %{name: "second"}, as_of: ~U[2026-07-01 00:00:00Z])
+
+      assert Exception.message(error) =~ "the period ends at"
+    end
+
+    test "given as :now names it, since it was given", %{record: record} do
+      assert {:error, %Ash.Error.Invalid{} = error} =
+               Ash.update(record, %{name: "second"}, as_of: :now)
+
+      assert Exception.message(error) =~ "as of :now"
+      refute Exception.message(error) =~ "the default when no `as_of` is given"
     end
   end
 

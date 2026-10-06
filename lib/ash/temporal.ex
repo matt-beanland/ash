@@ -64,70 +64,149 @@ defmodule Ash.Temporal do
   @doc """
   Checks the `as_of` of a write to a temporal resource, casting it as `cast_write_as_of/2` does.
 
-  An instant must cast to the type the resource's periods are built from. A range must
-  cast to the resource's period, and satisfy its constraints. Returns the cast `as_of`, or
-  an `Ash.Error.Changes.InvalidAsOf` saying why it is refused. Any `as_of` of a resource
-  that isn't temporal is returned unchanged.
-  """
-  @spec check_write_as_of(Ash.Resource.t(), as_of()) :: {:ok, term()} | {:error, Exception.t()}
-  def check_write_as_of(_resource, nil), do: {:ok, nil}
+  A range must cast to the resource's period, and satisfy its constraints. An instant must
+  cast to the type the resource's periods are built from, and lie within the period's
+  limits; for a create it opens a period with no end, which must satisfy the period's
+  constraints. Returns the cast `as_of`, or an `Ash.Error.Changes.InvalidAsOf` saying why
+  it is refused. Any `as_of` of a resource that isn't temporal is returned unchanged.
 
-  def check_write_as_of(resource, as_of) do
+  ### Options
+
+  * `:action_type` - the type of the write, `:create`, `:update` or `:destroy`.
+  * `:implied?` - whether the `as_of` is the default `:now` of a write given none.
+  * `:period_set?` - whether the write sets the period itself, as a seed does, so that an
+    instant only times it and is not checked against the period's limits.
+  """
+  @spec check_write_as_of(Ash.Resource.t(), as_of(), Keyword.t()) ::
+          {:ok, term()} | {:error, Exception.t()}
+  def check_write_as_of(resource, as_of, opts \\ [])
+  def check_write_as_of(_resource, nil, _opts), do: {:ok, nil}
+
+  def check_write_as_of(resource, as_of, opts) do
     if Ash.Resource.Info.temporal?(resource) do
-      do_check_write_as_of(resource, as_of)
+      do_check_write_as_of(resource, as_of, opts)
     else
       {:ok, as_of}
     end
   end
 
-  defp do_check_write_as_of(resource, %Ash.Range{} = as_of) do
+  defp do_check_write_as_of(resource, %Ash.Range{} = as_of, opts) do
     %{type: type, constraints: constraints} = Ash.Resource.Info.temporal_period(resource)
 
-    with {:ok, period} <- cast_or_refuse(resource, as_of, write_period(resource, as_of)),
-         {:ok, _} <-
-           refuse_unless_ok(
-             resource,
-             as_of,
-             Ash.Type.apply_constraints(type, period, constraints)
-           ) do
+    with {:ok, period} <- cast_or_refuse(resource, as_of, write_period(resource, as_of), opts),
+         :ok <- satisfies(resource, as_of, type, period, constraints, opts) do
       {:ok, period}
     end
   end
 
-  defp do_check_write_as_of(resource, as_of),
-    do: cast_or_refuse(resource, as_of, write_instant(resource, as_of))
+  defp do_check_write_as_of(resource, as_of, opts) do
+    %{type: type, constraints: constraints} = Ash.Resource.Info.temporal_period(resource)
 
-  defp cast_or_refuse(_resource, _as_of, {:ok, cast}), do: {:ok, cast}
+    with {:ok, instant} <- cast_or_refuse(resource, as_of, write_instant(resource, as_of), opts),
+         :ok <- unless_period_set(opts, &within_limits(resource, as_of, instant, constraints, &1)),
+         :ok <-
+           unless_period_set(
+             opts,
+             &opens_a_valid_period(resource, as_of, instant, type, constraints, &1)
+           ) do
+      {:ok, instant}
+    end
+  end
 
-  defp cast_or_refuse(resource, as_of, :error),
-    do:
-      {:error,
-       invalid_as_of(
-         resource,
-         as_of,
-         "an `as_of` is an instant of the resource's period, `:now`, or a range"
-       )}
+  defp unless_period_set(opts, check) do
+    if Keyword.get(opts, :period_set?, false), do: :ok, else: check.(opts)
+  end
 
-  defp refuse_unless_ok(_resource, _as_of, {:ok, value}), do: {:ok, value}
+  defp cast_or_refuse(_resource, _as_of, {:ok, cast}, _opts), do: {:ok, cast}
 
-  defp refuse_unless_ok(resource, as_of, {:error, [{key, _} | _] = error}) when is_atom(key),
-    do: {:error, invalid_as_of(resource, as_of, error[:message] || "invalid", error[:vars] || [])}
+  defp cast_or_refuse(resource, as_of, :error, opts) do
+    {:error,
+     invalid_as_of(
+       resource,
+       as_of,
+       "an `as_of` is an instant of the resource's period, `:now`, or a range",
+       [],
+       opts
+     )}
+  end
 
-  defp refuse_unless_ok(resource, as_of, {:error, [first | _]}),
-    do: refuse_unless_ok(resource, as_of, {:error, first})
+  defp satisfies(resource, as_of, type, period, constraints, opts) do
+    case Ash.Type.apply_constraints(type, period, constraints) do
+      {:ok, _} -> :ok
+      {:error, error} -> {:error, constraint_error(resource, as_of, error, opts)}
+    end
+  end
 
-  defp refuse_unless_ok(resource, as_of, {:error, message}) when is_binary(message),
-    do: {:error, invalid_as_of(resource, as_of, message)}
+  # An update or destroy writes within the version it splits, which already holds within the limits.
+  defp within_limits(resource, as_of, instant, constraints, opts) do
+    lower = constraints[:lower][:limit]
+    upper = constraints[:upper][:limit]
 
-  defp refuse_unless_ok(resource, as_of, _error),
-    do: {:error, invalid_as_of(resource, as_of, "invalid")}
+    cond do
+      lower && Comp.less_than?(instant, lower) ->
+        {:error,
+         invalid_as_of(
+           resource,
+           as_of,
+           "the period starts at %{limit} at the earliest",
+           [limit: lower],
+           opts
+         )}
 
-  defp invalid_as_of(resource, as_of, message, vars \\ []) do
+      upper && not Comp.less_than?(instant, upper) ->
+        {:error,
+         invalid_as_of(
+           resource,
+           as_of,
+           "the period ends at %{limit} at the latest",
+           [limit: upper],
+           opts
+         )}
+
+      true ->
+        :ok
+    end
+  end
+
+  # A create as of an instant opens a period with no end.
+  defp opens_a_valid_period(resource, as_of, instant, type, constraints, opts) do
+    if opts[:action_type] == :create do
+      if constraints[:upper][:limit] do
+        {:error,
+         invalid_as_of(
+           resource,
+           as_of,
+           "a create as of an instant has no end, and the period ends at %{limit} at the latest; write over a range ending at `:end`",
+           [limit: constraints[:upper][:limit]],
+           opts
+         )}
+      else
+        satisfies(resource, as_of, type, %Ash.Range{lower: instant}, constraints, opts)
+      end
+    else
+      :ok
+    end
+  end
+
+  defp constraint_error(resource, as_of, [{key, _} | _] = error, opts) when is_atom(key),
+    do: invalid_as_of(resource, as_of, error[:message] || "invalid", error[:vars] || [], opts)
+
+  defp constraint_error(resource, as_of, [first | _], opts),
+    do: constraint_error(resource, as_of, first, opts)
+
+  defp constraint_error(resource, as_of, message, opts) when is_binary(message),
+    do: invalid_as_of(resource, as_of, message, [], opts)
+
+  defp constraint_error(resource, as_of, _error, opts),
+    do: invalid_as_of(resource, as_of, "invalid", [], opts)
+
+  defp invalid_as_of(resource, as_of, message, vars, opts) do
     Ash.Error.Changes.InvalidAsOf.exception(
       resource: resource,
       as_of: as_of,
       message: message,
-      vars: vars
+      vars: vars,
+      implied?: Keyword.get(opts, :implied?, false)
     )
   end
 

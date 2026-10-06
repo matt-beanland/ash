@@ -4265,10 +4265,19 @@ defmodule Ash.Changeset do
   #
   # The pinned instant is also what the resource's `recorded_at` attribute is stamped with,
   # so a write that isn't back-dated records the same instant its period starts at.
+  # A seed sets the period itself, so its `as_of` only times the write.
+  defp period_set?(changeset) do
+    case Ash.Resource.Info.temporal_period(changeset.resource) do
+      %{name: name} -> Map.has_key?(changeset.attributes, name)
+      _ -> false
+    end
+  end
+
   @doc false
   def pin_temporal_write_now(%{as_of: nil} = changeset) do
     if Ash.Resource.Info.temporal?(changeset.resource) do
-      changeset = as_of(changeset, changeset.context[:private][:temporal_now] || :now)
+      changeset =
+        put_as_of(changeset, changeset.context[:private][:temporal_now] || :now, implied?: true)
 
       case changeset.as_of do
         %DateTime{} = now -> set_context(changeset, %{private: %{temporal_recorded_at: now}})
@@ -5636,8 +5645,15 @@ defmodule Ash.Changeset do
   @spec as_of(t(), DateTime.t() | Ash.Range.t() | :now | nil) :: t()
   def as_of(changeset, nil), do: changeset
 
-  def as_of(changeset, as_of) do
-    case Ash.Temporal.check_write_as_of(changeset.resource, as_of) do
+  def as_of(changeset, as_of), do: put_as_of(changeset, as_of, [])
+
+  defp put_as_of(changeset, as_of, opts) do
+    opts =
+      opts
+      |> Keyword.put(:action_type, changeset.action_type)
+      |> Keyword.put(:period_set?, period_set?(changeset))
+
+    case Ash.Temporal.check_write_as_of(changeset.resource, as_of, opts) do
       {:ok, as_of} ->
         # Read legs inherit the instant through `shared`; the range stays on `private`.
         %{changeset | as_of: as_of}
