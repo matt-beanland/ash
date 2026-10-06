@@ -120,12 +120,12 @@ defmodule Ash.Temporal do
   defp refuse_unless_ok(resource, as_of, _error),
     do: {:error, invalid_as_of(resource, as_of, "invalid")}
 
-  defp invalid_as_of(resource, as_of, reason, vars \\ []) do
+  defp invalid_as_of(resource, as_of, message, vars \\ []) do
     Ash.Error.Changes.InvalidAsOf.exception(
       resource: resource,
       as_of: as_of,
-      reason: reason,
-      reason_vars: vars
+      message: message,
+      vars: vars
     )
   end
 

@@ -425,7 +425,7 @@ defmodule Ash.DataLayer.EtsTemporalTest do
       assert {:error, %Ash.Error.Invalid{} = error} =
                Ash.update(record, %{name: "second"}, as_of: inclusive)
 
-      assert Exception.message(error) =~ "upper bound must be exclusive"
+      assert Exception.message(error) =~ ~s(upper bound must be "exclusive")
       assert name_at(~U[2021-03-15 00:00:00Z]) == "first"
     end
 
