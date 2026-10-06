@@ -511,6 +511,22 @@ defmodule Ash.TemporalTest do
     test "has no period when it has no instant" do
       assert :error = Ash.Temporal.write_period(Ash.Test.Temporal.EtsVersioned, nil)
     end
+
+    test "a period ending at :end ends at the period's upper limit" do
+      assert {:ok, %Ash.Range{lower: ~U[2025-10-01 00:00:00Z], upper: ~U[2026-07-01 00:00:00Z]}} =
+               Ash.Temporal.write_period(
+                 Ash.Test.Temporal.Limited,
+                 %Ash.Range{lower: ~U[2025-10-01 00:00:00Z], upper: :end}
+               )
+    end
+
+    test "[:start, :end) is the period's whole span" do
+      assert {:ok, %Ash.Range{lower: ~U[2025-07-01 00:00:00Z], upper: ~U[2026-07-01 00:00:00Z]}} =
+               Ash.Temporal.write_period(
+                 Ash.Test.Temporal.Limited,
+                 %Ash.Range{lower: :start, upper: :end}
+               )
+    end
   end
 
   defp narrow(as_of) do
