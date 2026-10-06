@@ -122,7 +122,7 @@ defmodule Ash.Temporal do
      invalid_as_of(
        resource,
        as_of,
-       "an `as_of` is `:now`, an instant of the resource's period, or a range",
+       "an `as_of` is an instant of the resource's period, `:now`, or a range",
        [],
        opts
      )}

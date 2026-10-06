@@ -5623,10 +5623,11 @@ defmodule Ash.Changeset do
   @doc """
   Pins a write to a temporal resource to an instant or a period.
 
-  `as_of` is `:now`, an instant of the resource's period, or a range, and is now when
-  unset. An instant is where the write takes effect: a create opens a period from it,
-  and an update or destroy splits the version valid at it. A range is the period the
-  write applies to, and satisfies the period attribute's constraints.
+  `as_of` is an instant of the resource's period, or a range. An instant is where the
+  write takes effect: a create opens a period from it, and an update or destroy splits
+  the version valid at it. `:now`, the default when unset, is the current instant. A
+  range is the period the write applies to, and satisfies the period attribute's
+  constraints.
 
   The write only guarantees its rules hold *at* `as_of`, at the time it is made —
   exactly like any non-temporal write, which guarantees its validations only at write
