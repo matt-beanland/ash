@@ -200,6 +200,33 @@ MyApp.Reading
 |> Ash.create!()
 ```
 
+### Writing on a grid
+
+Give the period a `resolution`, and its versions are carved into periods of that span, on a
+grid through its `anchor` (see `Ash.Type.Range`). An instant `as_of` takes effect at the start
+of the period holding it, `{:period, instant}` is that whole period, and a range must start and
+end on the grid:
+
+```elixir
+attribute :valid_at, Ash.Type.Range,
+  allow_nil?: false,
+  constraints: [
+    inner_type: :utc_datetime,
+    lower: [inclusive?: true],
+    upper: [inclusive?: false],
+    resolution: Duration.new!(minute: 5)
+  ]
+```
+
+```elixir
+# a poll at 10:07:30 records the five minutes from 10:05
+MyApp.InterfaceStats
+|> Ash.Changeset.for_create(:create, %{id: 4, octets: 1_204},
+  as_of: {:period, ~U[2026-10-07 10:07:30Z]}
+)
+|> Ash.create!()
+```
+
 ### When no version is valid at that instant
 
 An update or destroy acts on the version that's valid at `as_of`. If there isn't one, there's

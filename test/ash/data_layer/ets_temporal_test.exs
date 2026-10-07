@@ -6,7 +6,7 @@ defmodule Ash.DataLayer.EtsTemporalTest do
   @moduledoc false
   use ExUnit.Case, async: false
 
-  alias Ash.Test.Temporal.{EtsVersioned, Limited}
+  alias Ash.Test.Temporal.{EtsVersioned, Limited, Polled}
 
   require Ash.Query
 
@@ -14,6 +14,7 @@ defmodule Ash.DataLayer.EtsTemporalTest do
     on_exit(fn ->
       Ash.DataLayer.Ets.stop(EtsVersioned)
       Ash.DataLayer.Ets.stop(Limited)
+      Ash.DataLayer.Ets.stop(Polled)
     end)
   end
 
@@ -1447,6 +1448,77 @@ defmodule Ash.DataLayer.EtsTemporalTest do
 
       error = assert_raise Ash.Error.Invalid, fn -> Ash.read!(query) end
       assert [%Ash.Error.Query.AsOfNotAnInstant{}] = error.errors
+    end
+  end
+
+  describe "a period with a resolution" do
+    defp create_polled(id, as_of) do
+      Polled
+      |> Ash.Changeset.for_create(:create, %{id: id, name: "polled"}, as_of: as_of)
+      |> Ash.create()
+    end
+
+    defp polled_at(instant) do
+      Polled
+      |> Ash.Query.as_of(instant)
+      |> Ash.read!()
+      |> Enum.map(&{&1.name, &1.valid_at.lower, &1.valid_at.upper})
+    end
+
+    test "a create as of an instant opens from the start of its period" do
+      assert {:ok, created} = create_polled(1, ~U[2026-10-07 10:07:30Z])
+      assert %Ash.Range{lower: ~U[2026-10-07 10:05:00Z], upper: nil} = created.valid_at
+    end
+
+    test "{:period, instant} writes the period of the resolution holding it" do
+      assert {:ok, created} = create_polled(1, {:period, ~U[2026-10-07 10:07:30Z]})
+
+      assert %Ash.Range{lower: ~U[2026-10-07 10:05:00Z], upper: ~U[2026-10-07 10:10:00Z]} =
+               created.valid_at
+    end
+
+    test "an update as of an instant splits the version at the start of its period" do
+      record =
+        Ash.Seed.seed!(%Polled{
+          id: 1,
+          name: "first",
+          valid_at: %Ash.Range{lower: ~U[2026-10-07 10:00:00Z], upper: nil, bounds: :"[)"}
+        })
+
+      Ash.update!(record, %{name: "second"}, as_of: ~U[2026-10-07 10:07:30Z])
+
+      assert [{"first", ~U[2026-10-07 10:00:00Z], ~U[2026-10-07 10:05:00Z]}] =
+               polled_at(~U[2026-10-07 10:04:59Z])
+
+      assert [{"second", ~U[2026-10-07 10:05:00Z], nil}] = polled_at(~U[2026-10-07 10:05:00Z])
+    end
+
+    test "a range off the grid is refused, and nothing is written" do
+      off_grid = %Ash.Range{
+        lower: ~U[2026-10-07 10:06:00Z],
+        upper: ~U[2026-10-07 10:10:00Z],
+        bounds: :"[)"
+      }
+
+      assert {:error, %Ash.Error.Invalid{} = error} = create_polled(1, off_grid)
+
+      assert Exception.message(error) =~
+               "range :lower bound must be on the grid of its resolution"
+
+      assert polled_at(~U[2026-10-07 10:07:00Z]) == []
+    end
+
+    test "an inclusive upper bound on the grid covers its whole period" do
+      inclusive = %Ash.Range{
+        lower: ~U[2026-10-07 10:05:00Z],
+        upper: ~U[2026-10-07 10:10:00Z],
+        bounds: :"[]"
+      }
+
+      assert {:ok, created} = create_polled(1, inclusive)
+
+      assert %Ash.Range{lower: ~U[2026-10-07 10:05:00Z], upper: ~U[2026-10-07 10:15:00Z]} =
+               created.valid_at
     end
   end
 end
