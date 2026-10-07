@@ -21,7 +21,7 @@ defmodule Ash.Temporal do
   ```
 
   The write functions return a `DateTime` cast to the precision the resource's period
-  declares.
+  declares, and to the start of a period of its resolution.
 
   A write that provides no `as_of` takes effect now. Ash resolves it once for the whole write,
   before the data layer is called, so a data layer receives a temporal write's `as_of` as an
@@ -355,19 +355,14 @@ defmodule Ash.Temporal do
   @doc """
   Resolves the point where a write first takes effect.
 
-  The value comes back as a `DateTime`, cast to whatever precision the resource's period
-  declares.
+  The value comes back cast to whatever precision the resource's period declares, and at the
+  start of the period of its resolution holding it (see `Ash.Type.Range.period/2`).
   """
   @spec write_instant(Ash.Resource.t(), as_of()) :: {:ok, DateTime.t()} | :error
   def write_instant(resource, as_of) do
-    with inner_type when not is_nil(inner_type) <- Ash.Resource.Info.temporal_inner_type(resource),
+    with %{constraints: constraints} <- Ash.Resource.Info.temporal_period(resource),
          {:ok, raw} <- raw_instant(as_of),
-         {:ok, instant} <-
-           Ash.Type.cast_input(
-             inner_type,
-             raw,
-             Ash.Resource.Info.temporal_inner_constraints(resource) || []
-           ) do
+         {:ok, %Ash.Range{lower: instant}} <- Ash.Type.Range.period(raw, constraints) do
       {:ok, instant}
     else
       _ -> :error
