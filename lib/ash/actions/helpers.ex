@@ -441,6 +441,7 @@ defmodule Ash.Actions.Helpers do
 
   # Passed through so `Ash.Query.as_of/2` refuses it by name, as it does for the setter.
   defp resolve_query_as_of(_query, %Ash.Range{} = as_of), do: as_of
+  defp resolve_query_as_of(_query, {:period, _instant} = as_of), do: as_of
 
   defp resolve_query_as_of(query, nil) do
     if Ash.Resource.Info.temporal?(query.resource), do: DateTime.utc_now()

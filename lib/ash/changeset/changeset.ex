@@ -1984,7 +1984,15 @@ defmodule Ash.Changeset do
       doc: "set the tenant on the changeset"
     ],
     as_of: [
-      type: {:or, [{:struct, DateTime}, {:struct, Ash.Range}, {:literal, :now}, {:literal, nil}]},
+      type:
+        {:or,
+         [
+           {:struct, DateTime},
+           {:struct, Ash.Range},
+           {:tuple, [{:literal, :period}, {:or, [{:struct, DateTime}, {:literal, :now}]}]},
+           {:literal, :now},
+           {:literal, nil}
+         ]},
       doc:
         "set the `as_of` point in time on the changeset (time travel). See `Ash.Changeset.as_of/2`."
     ],
@@ -5627,7 +5635,8 @@ defmodule Ash.Changeset do
   write takes effect: a create opens a period from it, and an update or destroy splits
   the version valid at it. `:now`, the default when unset, is the current instant. A
   range is the period the write applies to, and satisfies the period attribute's
-  constraints.
+  constraints. `{:period, instant}`, with `:now` or an instant, is the period holding just
+  that instant, one unit of the period's precision long.
 
   The write only guarantees its rules hold *at* `as_of`, at the time it is made —
   exactly like any non-temporal write, which guarantees its validations only at write
@@ -5637,7 +5646,8 @@ defmodule Ash.Changeset do
   `as_of`. How (and whether) a period of validity is stored is up to the data
   layer.
   """
-  @spec as_of(t(), DateTime.t() | Ash.Range.t() | :now | nil) :: t()
+  @spec as_of(t(), DateTime.t() | Ash.Range.t() | {:period, DateTime.t() | :now} | :now | nil) ::
+          t()
   def as_of(changeset, nil), do: changeset
 
   def as_of(changeset, as_of), do: put_as_of(changeset, as_of, [])

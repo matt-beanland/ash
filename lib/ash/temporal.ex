@@ -29,14 +29,14 @@ defmodule Ash.Temporal do
   @temporal_safe_modules Application.compile_env(:ash, :temporal_safe_modules, [])
 
   @typedoc "An `as_of` as a caller may give it, before it is resolved."
-  @type as_of :: :now | term() | nil
+  @type as_of :: :now | {:period, :now | term()} | term() | nil
 
   @doc """
   Casts the `as_of` of a write to a temporal resource into the type its periods are built
   from, applying the precision that type declares.
 
-  An instant or `:now` becomes an instant (see `write_instant/2`) and a range becomes a period
-  (see `write_period/2`). Anything that can't be cast, and any `as_of` of a resource that
+  An instant or `:now` becomes an instant (see `write_instant/2`), and a range or
+  `{:period, instant}` becomes a period (see `write_period/2`). Anything that can't be cast, and any `as_of` of a resource that
   isn't temporal, is returned unchanged.
   """
   @spec cast_write_as_of(Ash.Resource.t(), as_of()) :: term()
@@ -45,10 +45,9 @@ defmodule Ash.Temporal do
   def cast_write_as_of(resource, as_of) do
     if Ash.Resource.Info.temporal?(resource) do
       result =
-        case as_of do
-          %Ash.Range{} -> write_period(resource, as_of)
-          _ -> write_instant(resource, as_of)
-        end
+        if period?(as_of),
+          do: write_period(resource, as_of),
+          else: write_instant(resource, as_of)
 
       case result do
         {:ok, cast} -> cast
@@ -62,7 +61,8 @@ defmodule Ash.Temporal do
   @doc """
   Checks the `as_of` of a write to a temporal resource, casting it as `cast_write_as_of/2` does.
 
-  A range must cast to the resource's period, and satisfy its constraints. An instant must
+  A range or `{:period, instant}` must cast to the resource's period, and satisfy its
+  constraints. An instant must
   cast to the type the resource's periods are built from, and lie within the period's
   limits; for a create it opens a period with no end, which must satisfy the period's
   constraints. Returns the cast `as_of`, or an `Ash.Error.Changes.InvalidAsOf` saying why
@@ -88,7 +88,13 @@ defmodule Ash.Temporal do
     end
   end
 
-  defp do_check_write_as_of(resource, %Ash.Range{} = as_of, opts) do
+  defp do_check_write_as_of(resource, as_of, opts) do
+    if period?(as_of),
+      do: check_write_period(resource, as_of, opts),
+      else: check_write_instant(resource, as_of, opts)
+  end
+
+  defp check_write_period(resource, as_of, opts) do
     %{type: type, constraints: constraints} = Ash.Resource.Info.temporal_period(resource)
 
     with {:ok, period} <- cast_or_refuse(resource, as_of, write_period(resource, as_of), opts),
@@ -97,7 +103,7 @@ defmodule Ash.Temporal do
     end
   end
 
-  defp do_check_write_as_of(resource, as_of, opts) do
+  defp check_write_instant(resource, as_of, opts) do
     %{type: type, constraints: constraints} = Ash.Resource.Info.temporal_period(resource)
 
     with {:ok, instant} <- cast_or_refuse(resource, as_of, write_instant(resource, as_of), opts),
@@ -122,7 +128,7 @@ defmodule Ash.Temporal do
      invalid_as_of(
        resource,
        as_of,
-       "an `as_of` is an instant of the resource's period, `:now`, or a range",
+       "an `as_of` is an instant of the resource's period, `:now`, a range, or `{:period, instant}`",
        [],
        opts
      )}
@@ -224,10 +230,10 @@ defmodule Ash.Temporal do
   Resolves the `as_of` a read answers at.
 
   `:now` resolves to the current time. `nil` means no particular time was provided. A range
-  raises `Ash.Error.Query.AsOfNotAnInstant`.
+  or `{:period, instant}` raises `Ash.Error.Query.AsOfNotAnInstant`.
   """
   @spec resolve_read_as_of(as_of()) :: term() | nil
-  def resolve_read_as_of(%Ash.Range{} = as_of) do
+  def resolve_read_as_of(as_of) when is_struct(as_of, Ash.Range) or elem(as_of, 0) == :period do
     raise Ash.Error.Query.AsOfNotAnInstant.exception(resource: nil, as_of: as_of)
   end
 
@@ -298,8 +304,10 @@ defmodule Ash.Temporal do
   @doc """
   Resolves the period a write is valid for.
 
-  The value comes back cast to the resource's period. It begins where the write takes effect
-  and extends forever unless a later write closes it.
+  The value comes back cast to the resource's period. A range is that period, and
+  `{:period, instant}` the period holding just the instant, one unit of the period's
+  precision long (see `Ash.Type.Range.period/2`). Otherwise the period begins where the write
+  takes effect and extends forever unless a later write closes it.
   """
   @spec write_period(Ash.Resource.t(), as_of()) :: {:ok, Ash.Range.t()} | :error
   def write_period(resource, %Ash.Range{} = as_of) do
@@ -311,6 +319,19 @@ defmodule Ash.Temporal do
       _ -> :error
     end
   end
+
+  def write_period(resource, {:period, instant})
+      when instant == :now or is_struct(instant, DateTime) do
+    with %{constraints: constraints} <- Ash.Resource.Info.temporal_period(resource),
+         {:ok, raw} <- raw_instant(instant),
+         {:ok, period} <- Ash.Type.Range.period(raw, constraints) do
+      {:ok, period}
+    else
+      _ -> :error
+    end
+  end
+
+  def write_period(_resource, {:period, _instant}), do: :error
 
   def write_period(resource, as_of) do
     case write_instant(resource, as_of) do
@@ -354,4 +375,8 @@ defmodule Ash.Temporal do
   defp raw_instant(%Ash.Range{lower: nil}), do: :error
   defp raw_instant(%Ash.Range{lower: lower}), do: raw_instant(lower)
   defp raw_instant(_as_of), do: :error
+
+  defp period?(%Ash.Range{}), do: true
+  defp period?({:period, _instant}), do: true
+  defp period?(_as_of), do: false
 end

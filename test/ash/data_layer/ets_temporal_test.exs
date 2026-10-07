@@ -1365,4 +1365,88 @@ defmodule Ash.DataLayer.EtsTemporalTest do
                ])
     end
   end
+
+  describe "an as_of of {:period, instant}" do
+    test "a create holds just the period of the instant, one unit of precision long" do
+      created =
+        EtsVersioned
+        |> Ash.Changeset.for_create(:create, %{id: 1, name: "one"},
+          as_of: {:period, ~U[2020-06-01 12:00:00.5Z]}
+        )
+        |> Ash.create!()
+
+      assert %Ash.Range{
+               lower: ~U[2020-06-01 12:00:00Z],
+               upper: ~U[2020-06-01 12:00:01Z],
+               bounds: :"[)"
+             } = created.valid_at
+    end
+
+    test "an update writes the one period, and the prior version resumes after it" do
+      record = Ash.Seed.seed!(%EtsVersioned{id: 1, name: "first", valid_at: @early})
+
+      Ash.update!(record, %{name: "second"}, as_of: {:period, ~U[2020-06-01 12:00:00Z]})
+
+      assert [
+               {"first", ~U[2020-01-01 00:00:00Z], ~U[2020-06-01 12:00:00Z]},
+               {"second", ~U[2020-06-01 12:00:00Z], ~U[2020-06-01 12:00:01Z]},
+               {"first", ~U[2020-06-01 12:00:01Z], ~U[2021-01-01 00:00:00Z]}
+             ] =
+               versions_at([
+                 ~U[2020-06-01 11:59:59Z],
+                 ~U[2020-06-01 12:00:00Z],
+                 ~U[2020-06-01 12:00:01Z]
+               ])
+    end
+
+    test ":now is the period holding the instant of the write" do
+      before = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      created =
+        EtsVersioned
+        |> Ash.Changeset.for_create(:create, %{id: 1, name: "now"}, as_of: {:period, :now})
+        |> Ash.create!()
+
+      %Ash.Range{lower: lower, upper: upper} = created.valid_at
+
+      assert DateTime.compare(lower, before) != :lt
+      assert DateTime.diff(upper, lower, :microsecond) == 1_000_000
+    end
+
+    test "a create of one period within a period's limits is accepted, where one as of the instant is not" do
+      assert {:ok, created} = create_limited(1, as_of: {:period, ~U[2025-10-01 00:00:00Z]})
+
+      assert %Ash.Range{lower: ~U[2025-10-01 00:00:00Z], upper: ~U[2025-10-01 00:00:01Z]} =
+               created.valid_at
+
+      assert {:error, _} = create_limited(2, as_of: ~U[2025-10-01 00:00:00Z])
+    end
+
+    test "a period beyond a period's limits is refused" do
+      assert {:error, %Ash.Error.Invalid{} = error} =
+               create_limited(1, as_of: {:period, ~U[2026-07-01 00:00:00Z]})
+
+      assert Exception.message(error) =~ "range :upper bound must be within its limit"
+    end
+
+    test "anything but :now or an instant is refused" do
+      for instant <- ["banana", @early] do
+        assert {:error, %Ash.Error.Invalid{} = error} =
+                 EtsVersioned
+                 |> Ash.Changeset.for_create(:create, %{id: 1, name: "x"},
+                   as_of: {:period, instant}
+                 )
+                 |> Ash.create()
+
+        assert Exception.message(error) =~ "{:period, instant}"
+      end
+    end
+
+    test "a read is refused, since it names no instant to read at" do
+      query = Ash.Query.as_of(EtsVersioned, {:period, :now})
+
+      error = assert_raise Ash.Error.Invalid, fn -> Ash.read!(query) end
+      assert [%Ash.Error.Query.AsOfNotAnInstant{}] = error.errors
+    end
+  end
 end
