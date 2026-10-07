@@ -3768,6 +3768,7 @@ defmodule Ash do
         with {:ok, opts} <- BulkCreateOpts.validate(opts),
              opts <- BulkCreateOpts.to_options(opts),
              {:ok, resource} <- Ash.Domain.Info.resource(domain, resource) do
+          opts = Ash.Actions.Helpers.pin_temporal_now(opts, resource)
           Ash.Actions.Create.Bulk.run(domain, resource, action, inputs, opts)
         else
           {:error, error} ->
@@ -3876,7 +3877,10 @@ defmodule Ash do
              opts <- BulkUpdateOpts.to_options(opts),
              {:ok, resource} <-
                Ash.Helpers.resource_from_query_or_stream(domain, query_or_stream, opts) do
-          opts = Keyword.put(opts, :resource, resource)
+          opts =
+            opts
+            |> Keyword.put(:resource, resource)
+            |> Ash.Actions.Helpers.pin_temporal_now(resource)
 
           Ash.Actions.Update.Bulk.run(domain, query_or_stream, action, input, opts)
         else
@@ -4078,7 +4082,11 @@ defmodule Ash do
              opts <- BulkDestroyOpts.to_options(opts),
              {:ok, resource} <-
                Ash.Helpers.resource_from_query_or_stream(domain, query_or_stream, opts) do
-          opts = Keyword.put(opts, :resource, resource)
+          opts =
+            opts
+            |> Keyword.put(:resource, resource)
+            |> Ash.Actions.Helpers.pin_temporal_now(resource)
+
           Ash.Actions.Destroy.Bulk.run(domain, query_or_stream, action, input, opts)
         else
           {:error, error} ->
