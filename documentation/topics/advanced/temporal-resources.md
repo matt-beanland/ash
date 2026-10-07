@@ -189,6 +189,17 @@ MyApp.Subscription
 |> Ash.create!()
 ```
 
+To write over just the period holding an instant, pass `{:period, instant}`, with `:now` or an
+instant. That period is one unit of the period's precision long, a second for `:utc_datetime`
+and a microsecond for `:utc_datetime_usec`, so a write names it without computing its bounds:
+
+```elixir
+# a reading for the current second
+MyApp.Reading
+|> Ash.Changeset.for_create(:create, %{id: 3, value: 42}, as_of: {:period, :now})
+|> Ash.create!()
+```
+
 ### When no version is valid at that instant
 
 An update or destroy acts on the version that's valid at `as_of`. If there isn't one, there's
