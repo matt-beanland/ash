@@ -6,7 +6,7 @@ defmodule Ash.DataLayer.EtsTemporalTest do
   @moduledoc false
   use ExUnit.Case, async: false
 
-  alias Ash.Test.Temporal.{EtsVersioned, Limited, Polled, Precise}
+  alias Ash.Test.Temporal.{Daily, EtsVersioned, Limited, Polled, Precise}
 
   require Ash.Query
 
@@ -15,6 +15,7 @@ defmodule Ash.DataLayer.EtsTemporalTest do
       Ash.DataLayer.Ets.stop(EtsVersioned)
       Ash.DataLayer.Ets.stop(Limited)
       Ash.DataLayer.Ets.stop(Polled)
+      Ash.DataLayer.Ets.stop(Daily)
       Ash.DataLayer.Ets.stop(Precise)
     end)
   end
@@ -1635,6 +1636,31 @@ defmodule Ash.DataLayer.EtsTemporalTest do
       assert {:ok, created} = create_polled(1, inclusive)
 
       assert %Ash.Range{lower: ~U[2026-10-07 10:05:00Z], upper: ~U[2026-10-07 10:15:00Z]} =
+               created.valid_at
+    end
+  end
+
+  describe "a period carved into days of a time zone" do
+    test "a create as of an instant opens from the start of that day in the zone" do
+      created =
+        Daily
+        |> Ash.Changeset.for_create(:create, %{id: 1, name: "monday"},
+          as_of: ~U[2025-10-05 20:00:00Z]
+        )
+        |> Ash.create!()
+
+      assert %Ash.Range{lower: ~U[2025-10-05 13:00:00Z], upper: nil} = created.valid_at
+    end
+
+    test "{:period, instant} is the whole day, however long the zone makes it" do
+      created =
+        Daily
+        |> Ash.Changeset.for_create(:create, %{id: 1, name: "sunday"},
+          as_of: {:period, ~U[2025-10-05 01:00:00Z]}
+        )
+        |> Ash.create!()
+
+      assert %Ash.Range{lower: ~U[2025-10-04 14:00:00Z], upper: ~U[2025-10-05 13:00:00Z]} =
                created.valid_at
     end
   end
